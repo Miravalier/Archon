@@ -1,0 +1,20 @@
+{
+  "name": "archon-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2",
+    "vite": "^6.1.1"
+  },
+  "dependencies": {
+    "pixi-filters": "^6.1.0",
+    "pixi.js": "^8.8.0"
+  },
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
+}

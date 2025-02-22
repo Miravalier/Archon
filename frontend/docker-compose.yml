@@ -1,0 +1,8 @@
+services:
+  archon_frontend:
+    image: nginx
+    container_name: archon_frontend
+    volumes:
+      - "./dist:/usr/share/nginx/html"
+    ports:
+      - ${WEB_PORT}:80

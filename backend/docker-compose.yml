@@ -1,0 +1,21 @@
+networks:
+  archon:
+    external: false
+
+services:
+  archon_api:
+    build: .
+    container_name: archon_api
+    ports:
+      - ${API_PORT}:80
+
+  archon_db:
+    image: mongo
+    container_name: archon_db
+    networks:
+      - archon
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:27017:27017
+    volumes:
+      - ${DATA_ROOT}/db:/data/db
