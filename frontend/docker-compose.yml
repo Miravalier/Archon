@@ -1,8 +1,19 @@
+networks:
+  archon:
+    external: true
+
 services:
   archon_frontend:
     image: nginx
     container_name: archon_frontend
     volumes:
-      - "./dist:/usr/share/nginx/html"
+      - "./default.conf.template:/etc/nginx/templates/default.conf.template"
+      - "./dist:/var/www/archon:ro"
     ports:
       - ${WEB_PORT}:80
+    environment:
+      - API_PORT=${API_PORT}
+      - NGINX_ENVSUBST_FILTER=^(API_PORT)$$
+    networks:
+      archon:
+        ipv4_address: 10.247.92.20

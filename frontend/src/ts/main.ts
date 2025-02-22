@@ -1,5 +1,6 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { state } from "./state.ts";
+import { client } from "./api.ts";
 
 
 async function Main() {
@@ -13,8 +14,16 @@ async function Main() {
     state.app = new Application();
     globalThis.__PIXI_APP__ = state.app;
 
-    await state.app.init({ background: '#232224', resizeTo: window });
+    await state.app.init({
+        background: '#232224',
+        resizeTo: window,
+        resolution: 1,
+    });
     document.body.appendChild(state.app.canvas);
+
+    // Initialize Overlay
+    state.overlay = document.body.appendChild(document.createElement("div"));
+    state.overlay.id = "overlay";
 
     // Initialize Camera
     state.camera = state.app.stage.addChild(new Container());
@@ -83,6 +92,9 @@ async function Main() {
     text.y = -102;
     text.anchor.set(0.5, 1);
     state.camera.addChild(text);
+
+    await client.init();
+    globalThis.client = client;
 
     console.log("[!] Loading Complete");
 }

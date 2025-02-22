@@ -3,7 +3,7 @@ export default {
     build: {
         rollupOptions: {
             input: {
-                main: '/index.html',
+                main: '/main.html',
             },
         },
         commonjsOptions: {
