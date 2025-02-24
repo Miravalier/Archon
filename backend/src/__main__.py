@@ -1,22 +1,33 @@
 import uvicorn
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-from . import handlers
-from .models import Connection
+from .errors import AuthError, ClientError
 from .subscriptions import router as subscriptions_router
+from .twitch import router as twitch_router
 
 
 app = FastAPI()
+
+
+@app.exception_handler(AuthError)
+async def handle_auth_error(_: Request, exc: AuthError):
+    return JSONResponse(status_code=401, content={
+        "type": "error",
+        "reason": str(exc),
+    })
+
+
+@app.exception_handler(ClientError)
+async def handle_client_error(_: Request, exc: ClientError):
+    return JSONResponse(status_code=400, content={
+        "type": "error",
+        "reason": str(exc),
+    })
+
+
 app.include_router(subscriptions_router)
-
-
-class HelloRequest(BaseModel):
-    name: str
-
-@handlers.register("hello", HelloRequest)
-def hello_handler(connection: Connection, request: HelloRequest):
-    return {"response": f"hi, {request.name}"}
+app.include_router(twitch_router)
 
 
 if __name__ == '__main__':

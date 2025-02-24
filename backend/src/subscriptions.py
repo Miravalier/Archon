@@ -1,8 +1,9 @@
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from typing import Union
 
-from .models import Connection
+from .request_models import Connection
 from .handlers import handlers
 
 
@@ -19,7 +20,12 @@ async def handle_ws_request(connection: Connection, request: dict) -> dict:
     if request_type in handlers:
         handler = handlers[request_type]
         try:
-            return handler.callback(connection, handler.model.model_validate(request))
+            params = {}
+            if handler.model is not None:
+                params["request"] = handler.model.model_validate(request)
+            if handler.connection_requested:
+                params["connection"] = connection
+            return handler.callback(**params)
         except ValidationError as e:
             return {"type": "error", "reason": "validation", "data": e.json()}
 
@@ -51,3 +57,8 @@ async def ws_subscription(websocket: WebSocket):
         pass
     finally:
         connected_clients.discard(connection)
+
+
+async def broadcast(message: Union[BaseModel, dict]):
+    if isinstance(message, BaseModel):
+        message = message.model_dump()
