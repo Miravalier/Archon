@@ -25,9 +25,14 @@ async def handle_ws_request(connection: Connection, request: dict) -> dict:
                 params["request"] = handler.model.model_validate(request)
             if handler.connection_requested:
                 params["connection"] = connection
-            return handler.callback(**params)
+            if handler.is_async:
+                return await handler.callback(**params)
+            else:
+                return handler.callback(**params)
         except ValidationError as e:
             return {"type": "error", "reason": "validation", "data": e.json()}
+        except Exception as e:
+            return {"type": "error", "reason": str(e)}
 
 
 @router.websocket("/subscribe")
@@ -50,6 +55,8 @@ async def ws_subscription(websocket: WebSocket):
         while True:
             request = await websocket.receive_json()
             response = await handle_ws_request(connection, request)
+            if response is None:
+                response = {}
             if "id" in request:
                 response["id"] = request["id"]
             await websocket.send_json(response)

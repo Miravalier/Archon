@@ -55,13 +55,12 @@ export class Client {
             return;
         }
 
-        await this.send({ type: "ping" });
-        // try {
-        //     await this.send({ type: "ping" });
-        // }
-        // catch {
-        //     console.error("Ping failed!");
-        // }
+        try {
+            await this.send({ type: "ping" });
+        }
+        catch {
+            console.error("Ping failed!");
+        }
     }
 
     async connectionWorker() {

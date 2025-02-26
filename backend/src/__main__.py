@@ -1,13 +1,26 @@
+import asyncio
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .errors import AuthError, ClientError
+from .game import game_thread
 from .subscriptions import router as subscriptions_router
 from .twitch import router as twitch_router
 
 
-app = FastAPI()
+tasks: list[asyncio.Task] = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    tasks.append(asyncio.create_task(game_thread()))
+
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.exception_handler(AuthError)
