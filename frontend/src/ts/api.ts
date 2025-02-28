@@ -1,10 +1,11 @@
 import { TimedFuture, Future, Sleep } from "./async.ts";
+import { Channel, Game, User } from "./models.ts";
 
 
 export interface WebsocketMessage {
     type?: string;
     data?: any;
-    id?: any;
+    request_id?: any;
 }
 
 
@@ -48,6 +49,9 @@ export class Client {
             localStorage.setItem("token", this.token);
         }
         this.connectionWorker();
+        while (!this.connected) {
+            await Sleep(10);
+        }
     }
 
     async tryPing() {
@@ -82,7 +86,7 @@ export class Client {
         }
     }
 
-    async request(method: string, endpoint: string, data: any = null): Promise<any> {
+    async httpRequest(method: string, endpoint: string, data: any = null): Promise<any> {
         if (!data) {
             data = {};
         }
@@ -109,7 +113,7 @@ export class Client {
     async send(data: any): Promise<any> {
         const messageId = this.messageId;
         this.messageId += 1;
-        data.id = messageId;
+        data.request_id = messageId;
 
         const future = new TimedFuture<any>(5000);
         this.waitingSenders[messageId] = future;
@@ -119,7 +123,12 @@ export class Client {
             this.lastTransmit = Date.now();
             const response = await future;
             if (response.type == "error") {
-                throw Error(`${response.reason} - ${response.data}`);
+                if (response.details) {
+                    throw Error(`${response.reason} - ${response.details}`);
+                }
+                else {
+                    throw Error(response.reason);
+                }
             }
             return response;
         }
@@ -137,7 +146,7 @@ export class Client {
             this.connected = true;
         }
 
-        const waitingSender = this.waitingSenders[message.id];
+        const waitingSender = this.waitingSenders[message.request_id];
         if (waitingSender) {
             waitingSender.resolve(message);
         }
@@ -177,6 +186,14 @@ export class Client {
         return await connected;
     }
 
+    async reconnect(): Promise<void> {
+        this.connected = false;
+        this.ws.close();
+        while (!this.connected) {
+            await Sleep(10);
+        }
+    }
+
     subscribe(type: string, callback: WebsocketHandler) {
         let subscription_set = this.subscriptions[type];
         if (!subscription_set) {
@@ -191,6 +208,22 @@ export class Client {
         if (subscription_set) {
             subscription_set.delete(callback);
         }
+    }
+
+    async getUser(): Promise<User> {
+        return await this.send({ type: "user/get" });
+    }
+
+    async getChannel(channel_id: string): Promise<Channel> {
+        return await this.send({ type: "channel/get", channel: channel_id });
+    }
+
+    async createGame(channel_id: string): Promise<Game> {
+        return await this.send({ type: "game/create", channel: channel_id });
+    }
+
+    async getGame(game_id: string): Promise<Game> {
+        return await this.send({ type: "game/get", game: game_id });
     }
 }
 

@@ -50,13 +50,14 @@ def handle_twitch_event(key: str = Header(), event: str = Header()):
 
         channel = database.channels.find_one_and_update(
            {"twitch_id": channel_id},
-           {"$set", {"name": channel_name}}
+           {"$set": {"name": channel_name}}
         )
         if not channel:
             channel = database.channels.create(Channel(twitch_id=channel_id, name=channel_name))
 
         user.name = user_name
         user.linked_channels[channel.id] = level
+        user.regenerate_link_code()
         channel.linked_users[user.id] = level
         database.users.save(user)
         database.channels.save(channel)

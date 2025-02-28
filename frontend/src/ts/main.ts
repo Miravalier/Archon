@@ -1,6 +1,29 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+import { Application, Color, Container, Graphics, Point } from "pixi.js";
 import { state } from "./state.ts";
 import { client } from "./api.ts";
+import { GridFilter } from "./filters.ts";
+import * as channelSelect from "./channel_select.ts";
+
+
+function createGrid(
+    width: number,
+    height: number,
+    squareSize: number,
+    translation_x: number,
+    translation_y: number,
+    scale: number,
+    color: Color,
+) {
+
+    const gridFilter = new GridFilter(width, height, squareSize, translation_x, translation_y, scale, color);
+    const gridContainer = new Container();
+    const gridGraphics = new Graphics();
+    gridGraphics.rect(0, 0, width, height);
+    gridGraphics.fill({ color: new Color(0xFFFFFF), alpha: 1.0 });
+    gridContainer.addChild(gridGraphics);
+    gridContainer.filters = [gridFilter];
+    return { gridFilter, gridContainer };
+}
 
 
 async function Main() {
@@ -28,6 +51,19 @@ async function Main() {
     // Initialize Camera
     state.camera = state.app.stage.addChild(new Container());
 
+    // Initialize hex grid
+    const { gridFilter, gridContainer } = createGrid(
+        state.app.canvas.width,
+        state.app.canvas.height,
+        100,
+        0,
+        0,
+        1.0,
+        new Color([0.1, 0.1, 0.1, 0.2]),
+    );
+    state.app.stage.addChild(gridContainer);
+    globalThis.gridFilter = gridFilter;
+
     // Add canvas pan listeners
     state.app.canvas.addEventListener("mousedown", mouseDownEvent => {
         let position = { x: mouseDownEvent.clientX, y: mouseDownEvent.clientY };
@@ -39,6 +75,7 @@ async function Main() {
             const deltaY = mouseMoveEvent.y - position.y;
             state.camera.x += deltaX;
             state.camera.y += deltaY;
+            gridFilter.uniforms.uTranslation = new Point(state.camera.x, state.camera.y);
             position = { x: mouseMoveEvent.clientX, y: mouseMoveEvent.clientY };
         };
 
@@ -75,28 +112,19 @@ async function Main() {
         state.camera.y *= zoomDelta;
         state.camera.x += state.app.canvas.width / 2;
         state.camera.y += state.app.canvas.height / 2;
+        gridFilter.uniforms.uScale = state.camera.scale.x;
+        gridFilter.uniforms.uTranslation.x = state.camera.x;
+        gridFilter.uniforms.uTranslation.y = state.camera.y;
     });
 
-    // Add debug rectangle
-    const rectangle = new Graphics();
-    rectangle.roundRect(-100, -100, 200, 200, 4);
-    rectangle.fill("#5080ff");
-    state.camera.addChild(rectangle);
-
-    // Add label to debug rectangle
-    const text = new Text();
-    text.style.fontSize = 32;
-    text.style.fill = "#ffffff";
-    text.style.stroke = "#000000";
-    text.text = "Test";
-    text.y = -102;
-    text.anchor.set(0.5, 1);
-    state.camera.addChild(text);
-
+    // Initialize client
     await client.init();
     globalThis.client = client;
 
     console.log("[!] Loading Complete");
+
+    // Initialize channel select
+    await channelSelect.activate();
 }
 
 

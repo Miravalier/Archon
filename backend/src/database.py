@@ -45,13 +45,14 @@ class DocumentCollection(Generic[M]):
         self.collection.create_index("name")
 
     def create(self, obj: M) -> M:
-        obj.id = self.insert_one(obj.model_dump())
+        obj.id = self.insert_one(obj.model_dump(exclude=["id"]))
         return obj
 
-    def save(self, obj: M):
-        if not obj.id:
-            obj.id = ObjectId().binary.hex()
-        self.upsert(obj.id, obj.model_dump("json"))
+    def save(self, obj: M) -> M:
+        upserted_id = self.upsert(obj.id, {"$set": obj.model_dump(mode="json", exclude=["id"])})
+        if upserted_id:
+            obj.id = upserted_id
+        return obj
 
     def pre_process_filter(self, filter: Union[dict, str, None, M]):
         if isinstance(filter, BaseModel):
@@ -119,7 +120,7 @@ class DocumentCollection(Generic[M]):
     def update_many(self, filter: Union[dict, str, M, None], update: dict, *args, **kwargs) -> int:
         return self.collection.update_many(self.pre_process_filter(filter), update, *args, **kwargs).matched_count
 
-    def upsert(self, filter: Union[dict, str, M, None], update: dict, *args, **kwargs):
+    def upsert(self, filter: Union[dict, str, M, None], update: dict, *args, **kwargs) -> str:
         return _jsonify_oid(self.collection.update_one(self.pre_process_filter(filter), update, *args, **kwargs, upsert=True).upserted_id)
 
     def insert_one(self, *args, **kwargs) -> str:

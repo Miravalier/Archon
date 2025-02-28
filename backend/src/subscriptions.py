@@ -3,6 +3,8 @@ from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 from typing import Union
 
+from . import database
+from .database_models import User
 from .request_models import Connection
 from .handlers import handlers
 
@@ -30,7 +32,7 @@ async def handle_ws_request(connection: Connection, request: dict) -> dict:
             else:
                 return handler.callback(**params)
         except ValidationError as e:
-            return {"type": "error", "reason": "validation", "data": e.json()}
+            return {"type": "error", "reason": "validation", "details": e.json()}
         except Exception as e:
             return {"type": "error", "reason": str(e)}
 
@@ -45,9 +47,12 @@ async def ws_subscription(websocket: WebSocket):
             break
 
     token: str = request["token"]
-    connection = Connection(token, websocket)
+    user = database.users.find_one({"token": token})
+    if user is None:
+        user = database.users.create(User(token=token))
+    connection = Connection(user, websocket)
 
-    print(f"[!] Connection from {token}")
+    print(f"[!] Connection from '{user.name if user.name else user.id}'")
 
     try:
         connected_clients.add(connection)
@@ -57,8 +62,8 @@ async def ws_subscription(websocket: WebSocket):
             response = await handle_ws_request(connection, request)
             if response is None:
                 response = {}
-            if "id" in request:
-                response["id"] = request["id"]
+            if "request_id" in request:
+                response["request_id"] = request["request_id"]
             await websocket.send_json(response)
     except WebSocketDisconnect:
         pass
