@@ -1,39 +1,52 @@
-import { Assets, Graphics, Text, Container, Sprite } from "pixi.js";
+import { Assets, Graphics, Text, Container, Sprite, Ticker } from "pixi.js";
 import { state } from "./state.ts";
 import { client } from "./api.ts";
 import { Entity, Game, Position, ResourceType, StructureType } from "./models.ts";
 
 
-async function makeSprite(url: string | string[], tint: number | number[] = null, size: number = null, mask: Container = null, label: string = null): Promise<Container> {
+function lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+}
+
+interface SpriteData {
+    url: string | string[];
+    tint?: number | number[];
+    size?: number;
+    mask?: Container;
+    label?: string;
+}
+
+
+async function makeSprite(data: SpriteData): Promise<[Container, SpriteData]> {
     const spriteContainer = new Container();
 
-    if (mask) {
-        spriteContainer.addChild(mask);
+    if (data.mask) {
+        spriteContainer.addChild(data.mask);
     }
 
-    if (!size) {
-        size = 200;
+    if (!data.size) {
+        data.size = 200;
     }
 
     let tint_array: number[];
-    if (tint) {
-        if (Array.isArray(tint)) {
-            tint_array = tint;
+    if (data.tint) {
+        if (Array.isArray(data.tint)) {
+            tint_array = data.tint;
         }
         else {
-            tint_array = [tint];
+            tint_array = [data.tint];
         }
     }
 
     let url_array: string[];
-    if (Array.isArray(url)) {
-        url_array = url;
+    if (Array.isArray(data.url)) {
+        url_array = data.url;
     }
     else {
-        url_array = [url];
+        url_array = [data.url];
     }
 
-    let workingSize = size;
+    let workingSize = data.size;
     for (const [index, url] of url_array.entries()) {
         const texture = await Assets.load(url)
         const sprite = Sprite.from(texture);
@@ -43,21 +56,21 @@ async function makeSprite(url: string | string[], tint: number | number[] = null
         spriteContainer.addChild(sprite);
         workingSize *= 0.75;
 
-        if (tint) {
+        if (data.tint) {
             sprite.tint = tint_array[index % tint_array.length];
         }
 
-        if (mask) {
-            sprite.mask = mask;
+        if (data.mask) {
+            sprite.mask = data.mask;
         }
     }
 
-    if (label) {
+    if (data.label) {
         const text = new Text();
         text.style.fontSize = 32;
         text.style.fill = "#ffffff";
         text.style.stroke = "#000000";
-        text.text = label;
+        text.text = data.label;
         text.y = 102;
         text.scale = 0.9 / state.camera.scale.x;
         text.anchor.set(0.5, 0);
@@ -66,12 +79,41 @@ async function makeSprite(url: string | string[], tint: number | number[] = null
         text.label = "label";
     }
 
-    return spriteContainer;
+    const hpBackground = new Graphics();
+    hpBackground.visible = false;
+    hpBackground.roundRect(-data.size / 2, -data.size / 2 - 8, data.size, 16, 4);
+    hpBackground.fill({ color: "#404040" })
+    hpBackground.stroke({ color: "#000000", width: 4 });
+    hpBackground.label = "hpBackground";
+    spriteContainer.addChild(hpBackground);
+
+    const hpFill = new Graphics();
+    hpFill.label = "hpFill";
+    spriteContainer.addChild(hpFill);
+
+    return [spriteContainer, data];
+}
+
+
+function setHealthPercent(id: string, hpPercent: number) {
+    if (!sprites[id]) {
+        return;
+    }
+
+    const [sprite, data] = sprites[id];
+
+    const hpBackground = sprite.getChildByLabel("hpBackground") as Graphics;
+    hpBackground.visible = true;
+
+    const hpBar = sprite.getChildByLabel("hpFill") as Graphics;
+    hpBar.clear();
+    hpBar.roundRect(-data.size / 2 + 2, -data.size / 2 - 6, (data.size - 4) * hpPercent, 12, 2);
+    hpBar.fill({ color: "#aa2020" });
 }
 
 
 const entities: { [id: string]: Entity } = {};
-const sprites: { [id: string]: Container } = {};
+const sprites: { [id: string]: [Container, SpriteData] } = {};
 
 
 function addToBoard(item: Container, position: Position) {
@@ -83,6 +125,8 @@ function addToBoard(item: Container, position: Position) {
 
 async function handleEntityCreate(entity: Entity) {
     let sprite: Container;
+    let data: SpriteData;
+    let hpVisible: boolean = false;
     if (entity.entity_type == "resource") {
         let icon: string = "/unknown.png";
         let tint: number = 0xffffff;
@@ -98,7 +142,7 @@ async function handleEntityCreate(entity: Entity) {
             icon = "/rock.png";
             tint = 0x808080;
         }
-        sprite = await makeSprite(icon, tint);
+        [sprite, data] = await makeSprite({ url: icon, tint });
     }
     else if (entity.entity_type == "structure") {
         let icon: string | string[] = "/unknown.png";
@@ -112,7 +156,8 @@ async function handleEntityCreate(entity: Entity) {
             icon = ["/tower.png", "/arrow-tower.png"];
             tint = [0xffffff, 0x00a0ff];
         }
-        sprite = await makeSprite(icon, tint, size);
+        [sprite, data] = await makeSprite({ url: icon, tint, size });
+        hpVisible = true;
     }
     else if (entity.entity_type == "worker") {
         let icon: string = "/unknown.png";
@@ -122,7 +167,7 @@ async function handleEntityCreate(entity: Entity) {
         const spriteMask = new Graphics();
         spriteMask.circle(0, 0, 100);
         spriteMask.fill(0xffffff);
-        sprite = await makeSprite(icon, null, 200, spriteMask, entity.name);
+        [sprite, data] = await makeSprite({ url: icon, mask: spriteMask, label: entity.name });
         sprite.eventMode = "dynamic";
         const spriteLabel = sprite.getChildByLabel("label");
         sprite.addEventListener("mouseenter", () => {
@@ -131,12 +176,16 @@ async function handleEntityCreate(entity: Entity) {
                 spriteLabel.visible = false;
             }, { once: true });
         });
+        hpVisible = true;
     }
     else {
         return;
     }
-    sprites[entity.id] = sprite;
+    sprites[entity.id] = [sprite, data];
     entities[entity.id] = entity;
+    if (hpVisible) {
+        setHealthPercent(entity.id, entity.hp / entity.max_hp);
+    }
     addToBoard(sprite, entity.position);
 }
 
@@ -224,14 +273,47 @@ export async function activate(channel_id: string) {
     });
 
     client.subscribe("entity/move", async data => {
-        const entity = entities[data.id];
-        const sprite = sprites[data.id];
-        if (!entity) {
+        if (!entities[data.id]) {
             return;
         }
+        const entity = entities[data.id];
         entity.position = new Position(data.position);
-        sprite.x = entity.position.x;
-        sprite.y = entity.position.y;
+
+        if (!sprites[data.id]) {
+            return;
+        }
+        const [sprite, _] = sprites[data.id];
+        const startX = sprite.x;
+        const startY = sprite.y;
+        const endX = entity.position.x;
+        const endY = entity.position.y;
+        const durationMs = 300;
+        let t = 0;
+        const moveHandler = (ticker: Ticker) => {
+            t += ticker.elapsedMS / durationMs;
+            if (t >= 1) {
+                sprite.x = endX;
+                sprite.y = endY;
+                ticker.remove(moveHandler);
+            }
+            else {
+                sprite.x = lerp(startX, endX, t);
+                sprite.y = lerp(startY, endY, t);
+            }
+        }
+        state.app.ticker.add(moveHandler);
+    });
+
+    client.subscribe("entity/remove", async data => {
+        if (entities[data.id]) {
+            delete entities[data.id];
+        }
+
+        if (sprites[data.id]) {
+            const [sprite, _] = sprites[data.id];
+            sprite.removeFromParent();
+            delete sprites[data.id];
+        }
     });
 
     client.subscribe("resource", async data => {

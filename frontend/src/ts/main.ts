@@ -47,9 +47,6 @@ async function Main() {
     state.overlay = document.body.appendChild(document.createElement("div"));
     state.overlay.id = "overlay";
 
-    // Initialize Camera
-    state.camera = state.app.stage.addChild(new Container());
-
     // Initialize hex grid
     const { gridFilter, gridGraphics, gridContainer } = createGrid(
         state.app.canvas.width,
@@ -61,6 +58,9 @@ async function Main() {
         new Color([0.1, 0.1, 0.1, 0.2]),
     );
     state.app.stage.addChild(gridContainer);
+
+    // Initialize Camera
+    state.camera = state.app.stage.addChild(new Container());
 
     // Add canvas pan listeners
     state.app.canvas.addEventListener("mousedown", mouseDownEvent => {
