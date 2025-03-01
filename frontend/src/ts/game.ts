@@ -153,6 +153,15 @@ const resourceIcons = {
 };
 
 
+const validCommands = [
+    "!join",
+    "!job builder",
+    "!job farmer",
+    "!job lumberjack",
+    "!job miner",
+];
+
+
 export async function activate(channel_id: string) {
     console.log("[!] Game View Page");
 
@@ -176,6 +185,14 @@ export async function activate(channel_id: string) {
         const resourceAmount = resource.appendChild(document.createElement("div"));
         resourceAmount.classList.add("amount");
         resourceAmounts[resourceType] = resourceAmount;
+    }
+
+    const commandsBar = overlay.appendChild(document.createElement("div"));
+    commandsBar.classList.add("commands-bar");
+    for (const validCommand of validCommands) {
+        const commandText = commandsBar.appendChild(document.createElement("div"));
+        commandText.classList.add("command");
+        commandText.textContent = validCommand;
     }
 
     state.camera.removeChildren();
@@ -218,7 +235,6 @@ export async function activate(channel_id: string) {
     });
 
     client.subscribe("resource", async data => {
-        console.log(data);
         game[data.resource_type] += data.amount;
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
     });

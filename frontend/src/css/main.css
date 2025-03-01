@@ -69,3 +69,14 @@ body {
     width: 3em;
     height: 3em;
 }
+
+.commands-bar {
+    position: absolute;
+    right: 0;
+    top: 0;
+}
+
+.command {
+    font-family: monospace;
+    font-size: 1.5em;
+}
