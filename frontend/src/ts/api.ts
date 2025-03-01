@@ -138,10 +138,6 @@ export class Client {
     }
 
     async onMessage(message: WebsocketMessage) {
-        if (message.type != "pong") {
-            console.log("[API Message]", message);
-        }
-
         if (message.type == "connect") {
             this.connected = true;
         }
@@ -211,19 +207,23 @@ export class Client {
     }
 
     async getUser(): Promise<User> {
-        return await this.send({ type: "user/get" });
+        return new User(await this.send({ type: "user/get" }));
     }
 
     async getChannel(channel_id: string): Promise<Channel> {
-        return await this.send({ type: "channel/get", channel: channel_id });
+        return new Channel(await this.send({ type: "channel/get", channel: channel_id }));
     }
 
     async createGame(channel_id: string): Promise<Game> {
-        return await this.send({ type: "game/create", channel: channel_id });
+        return new Game(await this.send({ type: "game/create", channel: channel_id }));
     }
 
     async getGame(game_id: string): Promise<Game> {
-        return await this.send({ type: "game/get", game: game_id });
+        return new Game(await this.send({ type: "game/get", game: game_id }));
+    }
+
+    async subscribeToGame(game_id: string): Promise<void> {
+        await this.send({ type: "game/subscribe", game: game_id });
     }
 }
 

@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 from fastapi import WebSocket
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.functional_validators import BeforeValidator
 from typing import Annotated
 
@@ -9,10 +8,11 @@ from .database_models import Channel, User
 from .errors import ClientError
 
 
-@dataclass
-class Connection:
+class Connection(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     user: User
-    ws: WebSocket
+    ws: WebSocket = Field(exclude=True)
 
     def __hash__(self):
         return hash(id(self))

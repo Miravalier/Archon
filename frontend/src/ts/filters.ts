@@ -38,6 +38,7 @@ export class GridFilter extends Filter {
                     uPitch: { value: squareSize, type: 'f32' },
                     uScale: { value: scale, type: 'f32' },
                     uColor: { value: color, type: 'vec4<f32>' },
+                    uDebug: { value: 0, type: 'f32' },
                 },
             },
         });

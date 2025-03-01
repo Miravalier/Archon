@@ -48,3 +48,24 @@ body {
     border-radius: 4px;
     background: black;
 }
+
+.resource-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    flex-flow: column nowrap;
+    align-items: start;
+}
+
+.resource {
+    display: flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+}
+
+.resource img {
+    width: 3em;
+    height: 3em;
+}

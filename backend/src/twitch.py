@@ -1,13 +1,15 @@
 import json
+import random
 import os
 from fastapi import APIRouter, Header
 from hmac import compare_digest
+from urllib.parse import unquote
 
 from . import database
 from .errors import AuthError, ClientError
 from .database_models import Permission, Channel
 from .request_models import channel_by_twitch_id
-from .game import games, Worker
+from .game import games, resource_types, Entity, EntityType, Position, Job
 
 
 TWITCH_KEY = os.environ["TWITCH_KEY"]
@@ -17,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/twitch-event")
-def handle_twitch_event(key: str = Header(), event: str = Header()):
+async def handle_twitch_event(key: str = Header(), event: str = Header()):
     if not compare_digest(key, TWITCH_KEY):
         raise AuthError("invalid twitch key")
 
@@ -89,9 +91,48 @@ def handle_twitch_event(key: str = Header(), event: str = Header()):
         if game is None:
             raise ClientError("no active game on this channel")
 
-        worker = game.workers.get(user_id)
+        worker = game.entities.get(user_id)
         if worker is None:
-            worker = Worker(id=user_id, name=user_name)
-            game.workers[user_id] = worker
+            worker = Entity(
+                entity_type=EntityType.Worker,
+                id=user_id,
+                name=user_name,
+                position=game.empty_space_near(Position(0,0)),
+                job=random.choice([Job.Lumberjack, Job.Farmer, Job.Miner]),
+                priority=random.choice(resource_types),
+                image=unquote(user_image),
+            )
+            await game.add_entity(worker)
         worker.name = user_name
 
+    if request.get("type") == "job":
+        user_id: str = request.get("userId")
+        channel_id: str = request.get("channelId")
+        job_input: str = request.get("job")
+
+        if not user_id or not channel_id or not job_input:
+            return
+
+        try:
+            job = Job(job_input.lower())
+        except ValueError:
+            return
+
+        channel = channel_by_twitch_id(channel_id)
+        game = games.get(channel.id)
+        if game is None:
+            raise ClientError("no active game on this channel")
+
+        worker = game.entities.get(user_id)
+        if worker is None:
+            worker = Entity(
+                entity_type=EntityType.Worker,
+                id=user_id,
+                name=user_name,
+                position=game.empty_space_near(Position(0,0)),
+                job=job,
+                priority=random.choice(resource_types),
+            )
+            await game.add_entity(worker)
+        else:
+            worker.job = job

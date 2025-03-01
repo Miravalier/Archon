@@ -1,3 +1,4 @@
+import traceback
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
@@ -5,7 +6,7 @@ from typing import Union
 
 from . import database
 from .database_models import User
-from .request_models import Connection
+from .request_models import Connection, channel_by_id
 from .handlers import handlers
 
 
@@ -34,6 +35,7 @@ async def handle_ws_request(connection: Connection, request: dict) -> dict:
         except ValidationError as e:
             return {"type": "error", "reason": "validation", "details": e.json()}
         except Exception as e:
+            traceback.print_exception(e)
             return {"type": "error", "reason": str(e)}
 
 
@@ -50,7 +52,7 @@ async def ws_subscription(websocket: WebSocket):
     user = database.users.find_one({"token": token})
     if user is None:
         user = database.users.create(User(token=token))
-    connection = Connection(user, websocket)
+    connection = Connection(user=user, ws=websocket)
 
     print(f"[!] Connection from '{user.name if user.name else user.id}'")
 

@@ -14,7 +14,6 @@ function createGrid(
     scale: number,
     color: Color,
 ) {
-
     const gridFilter = new GridFilter(width, height, squareSize, translation_x, translation_y, scale, color);
     const gridContainer = new Container();
     const gridGraphics = new Graphics();
@@ -22,7 +21,7 @@ function createGrid(
     gridGraphics.fill({ color: new Color(0xFFFFFF), alpha: 1.0 });
     gridContainer.addChild(gridGraphics);
     gridContainer.filters = [gridFilter];
-    return { gridFilter, gridContainer };
+    return { gridFilter, gridGraphics, gridContainer };
 }
 
 
@@ -52,17 +51,16 @@ async function Main() {
     state.camera = state.app.stage.addChild(new Container());
 
     // Initialize hex grid
-    const { gridFilter, gridContainer } = createGrid(
+    const { gridFilter, gridGraphics, gridContainer } = createGrid(
         state.app.canvas.width,
         state.app.canvas.height,
-        100,
+        state.gridSize,
         0,
         0,
         1.0,
         new Color([0.1, 0.1, 0.1, 0.2]),
     );
     state.app.stage.addChild(gridContainer);
-    globalThis.gridFilter = gridFilter;
 
     // Add canvas pan listeners
     state.app.canvas.addEventListener("mousedown", mouseDownEvent => {
@@ -92,6 +90,13 @@ async function Main() {
         }, { signal: controller.signal });
     });
 
+    // Add resize listener
+    window.addEventListener("resize", () => {
+        gridGraphics.rect(0, 0, window.innerWidth, window.innerHeight);
+        gridGraphics.fill({ color: new Color(0xFFFFFF), alpha: 1.0 });
+        gridFilter.uniforms.uViewport = new Point(window.innerWidth, window.innerHeight);
+    });
+
     // Add zoom listener
     state.app.canvas.addEventListener("wheel", ev => {
         ev.preventDefault();
@@ -99,9 +104,15 @@ async function Main() {
         let zoomDelta: number;
         if (ev.deltaY > 0) {
             zoomDelta = 0.9;
+            if (gridFilter.uniforms.uScale < 0.1) {
+                return;
+            }
         }
         else {
             zoomDelta = 1.1;
+            if (gridFilter.uniforms.uScale > 3) {
+                return;
+            }
         }
 
         state.camera.x -= state.app.canvas.width / 2;
