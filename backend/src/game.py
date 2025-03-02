@@ -8,11 +8,12 @@ from enum import IntEnum, StrEnum
 from math import sqrt
 from pydantic import BaseModel, Field
 from pydantic.functional_validators import BeforeValidator
-from typing import Annotated, Any, Iterable, Optional
+from typing import Annotated, Any, Optional
 
 from .errors import AuthError, ClientError
 from .handlers import register
-from .request_models import Connection, ChannelRequest
+from .pqueue import PriorityQueue
+from .request_models import Connection, Channel, ChannelRequest
 
 
 def generate_id() -> str:
@@ -99,6 +100,12 @@ class Position(BaseModel):
             Position(q=self.q-1, r=self.r),
         ]
 
+    @property
+    def random_neighbors(self) -> list[Position]:
+        result = self.neighbors
+        random.shuffle(result)
+        return result
+
     def flood_fill(self, limit: int = None):
         already_visited: set[Position] = {self}
         current_positions: list[Position] = [self]
@@ -113,6 +120,7 @@ class Position(BaseModel):
                     already_visited.add(neighbor)
                     next_positions.append(neighbor)
             current_positions = next_positions
+            random.shuffle(current_positions)
             if limit is not None and distance >= limit:
                 return
             distance += 1
@@ -138,6 +146,17 @@ class Position(BaseModel):
         return max(abs(self.q), abs(self.r), abs(self.s))
 
     @classmethod
+    def from_cube(cld, q: int = None, r: int = None, s: int = None) -> Position:
+        if int(q != None) + int(r != None) + int(s != None) != 2:
+            raise ValueError("specify exactly two of q, r, and s")
+        if s is None:
+            return Position(q=q, r=r)
+        if r is None:
+            return Position(q=q, r=-s-q)
+        if q is None:
+            return Position(q=-s-r, r=r)
+
+    @classmethod
     def from_floats(cls, q: float, r: float) -> Position:
         q_grid = round(q)
         r_grid = round(r)
@@ -159,7 +178,7 @@ class Position(BaseModel):
         results: list[Position] = []
         interval = 1/distance
         for i in range(distance+1):
-            results.append(self.from_floats(self.lerp(other, interval * i)))
+            results.append(self.lerp(other, interval * i))
         return results
 
     def hexes_within(self, distance: int) -> list[Position]:
@@ -224,6 +243,7 @@ class Entity(BaseModel):
     carry_amount: int = 0
     carry_capacity: int = 25
     tasks: list[Task] = Field(default_factory=list)
+    path: list[Position] = Field(default_factory=list)
     gathering_rate: float = 1.0
     action_cooldown: float = 1.0
     time_until_action: float = 1.0
@@ -253,6 +273,14 @@ class Entity(BaseModel):
             self.time_until_action -= delta
             return
         self.time_until_action = random.uniform(self.action_cooldown - 0.05, self.action_cooldown + 0.05)
+
+        if self.path:
+            next_position = self.path.pop()
+            if next_position in game.map:
+                self.path = []
+            else:
+                await game.move_entity(self, next_position)
+                return
 
         if self.alignment == Alignment.Player:
             await self.on_worker_tick(game)
@@ -353,7 +381,11 @@ class Entity(BaseModel):
         path = game.path_between(self.position, target_position, limit)
         if not path:
             return False
-        await game.move_entity(self, path[0])
+        path = path[0:len(path)//5 + 1]
+        if len(path) == 1:
+            await game.move_entity(self, path[0])
+        else:
+            await game.assign_path(self, path)
         return True
 
 
@@ -363,6 +395,7 @@ class Game(BaseModel):
     state: GameState = GameState.Lobby
     entities: dict[str, Entity] = Field(default_factory=dict)
 
+    channel: Channel = Field(exclude=True)
     resources: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     structures: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     units: dict[str, Entity] = Field(default_factory=dict, exclude=True)
@@ -372,11 +405,39 @@ class Game(BaseModel):
     spawn_cooldown: float = 5.0
     time_until_spawn: float = 10.0
 
-    food: float = 100.0
-    gold: float = 100.0
-    stone: float = 0.0
-    wood: float = 0.0
-    aether: float = 0.0
+    food: float = 1000.0
+    gold: float = 1000.0
+    stone: float = 1000.0
+    wood: float = 1000.0
+    aether: float = 1000.0
+
+    min_q: int = Field(0, exclude=True)
+    min_r: int = Field(0, exclude=True)
+    min_s: int = Field(0, exclude=True)
+    max_q: int = Field(0, exclude=True)
+    max_r: int = Field(0, exclude=True)
+    max_s: int = Field(0, exclude=True)
+    spawn_points: list[Position] = Field(default_factory=list)
+
+    async def generate_spawn_points(self):
+        standoff = 30
+        cube_pairs = [
+            {"s": self.max_s + standoff, "r": self.min_r - standoff},
+            {"r": self.min_r - standoff, "q": self.max_q + standoff},
+            {"q": self.max_q + standoff, "s": self.min_s - standoff},
+            {"s": self.min_s - standoff, "r": self.max_r + standoff},
+            {"r": self.max_r + standoff, "q": self.min_q - standoff},
+            {"q": self.min_q - standoff, "s": self.max_s + standoff},
+            {"s": self.max_s + standoff, "r": self.min_r - standoff},
+        ]
+        self.spawn_points: list[Position] = []
+        previous_position = None
+        for pair in cube_pairs:
+            position = Position.from_cube(**pair)
+            if previous_position is not None:
+                self.spawn_points.extend(previous_position.line_to(position))
+            previous_position = position
+        await self.broadcast({"type": "spawn-resize", "size": len(self.spawn_points)})
 
     async def broadcast(self, message: Any):
         broken_connections: set[Connection] = set()
@@ -396,7 +457,8 @@ class Game(BaseModel):
         self.time_until_spawn -= delta
         if self.time_until_spawn <= 0:
             self.time_until_spawn = random.uniform(self.spawn_cooldown - 0.05, self.spawn_cooldown + 0.05)
-            await self.spawn_enemy()
+            for _ in range(len(self.spawn_points) // 90):
+                await self.spawn_enemy()
 
     async def spend(self, *costs: tuple[ResourceType, int]):
         for resource_type, amount in costs:
@@ -426,7 +488,6 @@ class Game(BaseModel):
         if target.hp == 0:
             await self.remove_entity(target)
 
-
     async def spawn_enemy(self) -> Entity:
         return await self.add_entity(Entity(
             entity_type=EntityType.Unit,
@@ -435,10 +496,7 @@ class Game(BaseModel):
             name="Voidling",
             hp=5,
             max_hp=5,
-            position=Position(
-                10 + random.randint(0, 10) * random.choice((-1, 1)),
-                10 + random.randint(0, 10) * random.choice((-1, 1))
-            ),
+            position=self.empty_space_near(random.choice(self.spawn_points)),
         ))
 
     async def place_town_hall(self):
@@ -495,6 +553,27 @@ class Game(BaseModel):
         self.map[entity.position] = entity
         if entity.entity_type == EntityType.Structure:
             self.structures[entity.id] = entity
+            spawn_area_grown = False
+            if entity.position.q < self.min_q:
+                self.min_q = entity.position.q
+                spawn_area_grown = True
+            if entity.position.r < self.min_r:
+                self.min_r = entity.position.r
+                spawn_area_grown = True
+            if entity.position.s < self.min_s:
+                self.min_s = entity.position.s
+                spawn_area_grown = True
+            if entity.position.q > self.max_q:
+                self.max_q = entity.position.q
+                spawn_area_grown = True
+            if entity.position.r > self.max_r:
+                self.max_r = entity.position.r
+                spawn_area_grown = True
+            if entity.position.s > self.max_s:
+                self.max_s = entity.position.s
+                spawn_area_grown = True
+            if spawn_area_grown:
+                await self.generate_spawn_points()
         elif entity.entity_type == EntityType.Unit:
             self.units[entity.id] = entity
         elif entity.entity_type == EntityType.Resource:
@@ -523,6 +602,11 @@ class Game(BaseModel):
             self.resources.pop(entity.id, None)
         await self.broadcast({"type": "entity/remove", "id": entity.id})
 
+    async def assign_path(self, entity: Entity, path: list[Position]):
+        path.reverse()
+        entity.path = path
+        await self.move_entity(entity, entity.path.pop())
+
     def empty_space_near(self, starting_position: Position) -> Position:
         for position in starting_position.flood_fill():
             if position not in self.map:
@@ -538,6 +622,45 @@ class Game(BaseModel):
         return path
 
     def path_between(self, start_position: Position, target_position: Position, limit: int = 20) -> list[Position]:
+        """
+        Use ε-admissible A* to find the best path reachable while
+        considering a limited number of positions.
+        """
+        queue: PriorityQueue[Position, int] = PriorityQueue()
+        queue.add(start_position, 2 * target_position.distance(start_position))
+        previous_positions: dict[Position, Position] = {start_position: None}
+
+        # Least distance from start
+        least_distances: dict[Position, int] = {start_position: 0}
+
+        # Closest position to end
+        best_target = start_position
+        best_target_distance = target_position.distance(best_target)
+
+        steps = 0
+        while queue and steps < limit:
+            steps += 1
+            position = queue.pop()
+            if position == target_position:
+                best_target = target_position
+                break
+            distance_to_target = target_position.distance(position)
+            if distance_to_target < best_target_distance:
+                best_target = position
+                best_target_distance = distance_to_target
+            for neighbor in position.random_neighbors:
+                if neighbor in self.map:
+                    continue
+                distance = least_distances[position] + 1
+                current_best = least_distances.get(neighbor, None)
+                if current_best is None or distance < current_best:
+                    previous_positions[neighbor] = position
+                    least_distances[neighbor] = distance
+                    queue.add(neighbor, distance + 2 * target_position.distance(neighbor))
+
+        return self.resolve_path(start_position, best_target, previous_positions)
+
+    def flood_fill_path_between(self, start_position: Position, target_position: Position, limit: int = 20) -> list[Position]:
         already_visited: set[Position] = {start_position}
         current_positions: list[Position] = [start_position]
         previous_positions: dict[Position, Position] = {start_position: None}
@@ -557,6 +680,7 @@ class Game(BaseModel):
                     already_visited.add(neighbor)
                     next_positions.append(neighbor)
             current_positions = next_positions
+            random.shuffle(current_positions)
             if limit is not None and distance >= limit:
                 break
             distance += 1
@@ -607,7 +731,7 @@ async def handle_game_create(connection: Connection, request: ChannelRequest):
     if request.channel.id in games:
         raise ClientError("channel already has a game")
 
-    game = Game(id=request.channel.id, player=connection.user.id)
+    game = Game(id=request.channel.id, player=connection.user.id, channel=request.channel)
     await game.place_town_hall()
     await game.generate_resources()
     games[game.id] = game
@@ -616,7 +740,7 @@ async def handle_game_create(connection: Connection, request: ChannelRequest):
 
 @register("game/get")
 async def handle_game_get(connection: Connection, request: GameRequest):
-    if request.game.player != connection.user.id:
+    if connection.user.id not in request.game.channel.linked_users:
         raise AuthError("insufficient permissions")
 
     return request.game.model_dump()
@@ -624,7 +748,7 @@ async def handle_game_get(connection: Connection, request: GameRequest):
 
 @register("game/subscribe")
 async def handle_game_subscribe(connection: Connection, request: GameRequest):
-    if request.game.player != connection.user.id:
+    if connection.user.id not in request.game.channel.linked_users:
         raise AuthError("insufficient permissions")
 
     request.game.subscribers.add(connection)
@@ -638,7 +762,7 @@ class BuildRequest(GameRequest):
 
 @register("game/build/arrow_tower")
 async def handle_build_tower(connection: Connection, request: BuildRequest):
-    if request.game.player != connection.user.id:
+    if connection.user.id not in request.game.channel.linked_users:
         raise AuthError("insufficient permissions")
 
     if request.position in request.game.map:

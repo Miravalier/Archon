@@ -1,8 +1,7 @@
-import { Assets, Graphics, Text, Container, Sprite, Ticker, removeStructAndGroupDuplicates, v8_0_0 } from "pixi.js";
+import { Assets, Graphics, Text, Container, Sprite, Ticker } from "pixi.js";
 import { state } from "./state.ts";
 import { client } from "./api.ts";
-import { Entity, Game, Position, EntityType, ResourceType, StructureType, UnitType } from "./models.ts";
-import { register } from "./events.ts";
+import { Alignment, Entity, Game, Position, EntityType, ResourceType, StructureType, UnitType } from "./models.ts";
 
 
 function lerp(a: number, b: number, t: number): number {
@@ -311,6 +310,13 @@ export async function activate(channel_id: string) {
         game = await client.createGame(channel_id);
     }
 
+    const infoRegion = overlay.appendChild(document.createElement("div"));
+    infoRegion.classList.add("info-region");
+    const enemiesPerWaveText = infoRegion.appendChild(document.createElement("div"));
+    enemiesPerWaveText.textContent = `Enemies/Wave: ${Math.floor(game.spawn_points.length / 90)}`;
+    const enemyCountText = infoRegion.appendChild(document.createElement("div"));
+    enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
+
     // Render the initial game state
     for (const entity of Object.values(game.entities)) {
         await onEntityCreate(game, entity);
@@ -332,6 +338,10 @@ export async function activate(channel_id: string) {
         game.entities[entity.id] = entity;
         if (entity.entity_type == EntityType.Unit) {
             game.units[entity.id] = entity;
+            if (entity.alignment == Alignment.Enemy) {
+                game.enemyCount += 1;
+                enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
+            }
         }
         else if (entity.entity_type == EntityType.Resource) {
             game.resources[entity.id] = entity;
@@ -415,6 +425,11 @@ export async function activate(channel_id: string) {
         delete game.resources[data.id];
         delete game.structures[data.id];
 
+        if (entity.entity_type == EntityType.Unit && entity.alignment == Alignment.Enemy) {
+            game.enemyCount -= 1;
+            enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
+        }
+
         if (sprites[data.id]) {
             const [sprite, _] = sprites[data.id];
             delete sprites[data.id];
@@ -427,5 +442,9 @@ export async function activate(channel_id: string) {
     client.subscribe("resource", async data => {
         game[data.resource_type] += data.amount;
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
+    });
+
+    client.subscribe("spawn-resize", async data => {
+        enemiesPerWaveText.textContent = `Enemies/Wave: ${Math.floor(data.size / 90)}`;
     });
 }

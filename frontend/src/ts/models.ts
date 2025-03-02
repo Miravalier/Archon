@@ -170,6 +170,13 @@ export enum EntityType {
 }
 
 
+export enum Alignment {
+    Neutral = 0,
+    Player = 1,
+    Enemy = 2,
+}
+
+
 export class Entity {
     entity_type: EntityType;
     id: string;
@@ -178,6 +185,7 @@ export class Entity {
     hp: number;
     max_hp: number;
     image?: string;
+    alignment: Alignment;
 
     unit_type: UnitType;
     tasks: Task[];
@@ -209,6 +217,7 @@ export class Entity {
         this.max_hp = data.max_hp;
         this.structure_type = data.structure_type;
         this.image = data.image;
+        this.alignment = data.alignment;
     }
 }
 
@@ -223,6 +232,8 @@ export class Game {
     units: { [id: string]: Entity };
 
     map: { [position: string]: Entity };
+    spawn_points: Position[];
+    enemyCount: number;
 
     food: number;
     gold: number;
@@ -239,12 +250,16 @@ export class Game {
         this.structures = {};
         this.units = {};
         this.map = {};
+        this.enemyCount = 0;
         for (const [entityId, rawEntity] of Object.entries(data.entities)) {
             const entity = new Entity(rawEntity);
             this.map[entity.position.toKey()] = entity;
             this.entities[entityId] = entity;
             if (entity.entity_type == EntityType.Unit) {
                 this.units[entityId] = entity;
+                if (entity.alignment == Alignment.Enemy) {
+                    this.enemyCount += 1;
+                }
             }
             else if (entity.entity_type == EntityType.Resource) {
                 this.resources[entityId] = entity;
@@ -262,5 +277,6 @@ export class Game {
         this.stone = data.stone;
         this.wood = data.wood;
         this.aether = data.aether;
+        this.spawn_points = data.spawn_points;
     }
 }
