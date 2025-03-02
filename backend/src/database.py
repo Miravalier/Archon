@@ -137,3 +137,4 @@ db = client.archon_db
 # Collections
 users = DocumentCollection(db.users, database_models.User)
 channels = DocumentCollection(db.channels, database_models.Channel)
+chatters = DocumentCollection(db.chatters, database_models.Chatter)

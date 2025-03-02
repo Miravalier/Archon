@@ -80,3 +80,23 @@ body {
     font-family: monospace;
     font-size: 1.5em;
 }
+
+.build-bar {
+    position: absolute;
+    bottom: 0;
+    background: #00000030;
+    padding: 4px;
+    border-radius: 12px;
+}
+
+.build-button:hover {
+    filter: drop-shadow(0 0 8px #a0d0ff);
+}
+
+.build-button {
+    height: 4em;
+    width: 4em;
+    cursor: pointer;
+    pointer-events: auto;
+    margin: 4px;
+}

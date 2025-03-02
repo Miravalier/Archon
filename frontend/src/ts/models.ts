@@ -10,7 +10,9 @@ export enum Permission {
 }
 
 
-export enum Job {
+export enum UnitType {
+    Null = "",
+
     Miner = "miner",
     Farmer = "farmer",
     Lumberjack = "lumberjack",
@@ -19,11 +21,13 @@ export enum Job {
     Militia = "militia",
     Merchant = "merchant",
     Scout = "scout",
+
+    Voidling = "voidling",
 }
 
 
 export enum ResourceType {
-    Invalid = "",
+    Null = "",
     Food = "food",
     Gold = "gold",
     Stone = "stone",
@@ -96,6 +100,41 @@ export class Position {
     get y() {
         return state.gridSize * 1.5 * (3 / 2 * this.r);
     }
+
+    toKey() {
+        return `${this.q},${this.r}`;
+    }
+
+    get neighbors() {
+        return [
+            new Position({ q: this.q, r: this.r - 1 }),
+            new Position({ q: this.q + 1, r: this.r - 1 }),
+            new Position({ q: this.q + 1, r: this.r }),
+            new Position({ q: this.q, r: this.r + 1 }),
+            new Position({ q: this.q - 1, r: this.r + 1 }),
+            new Position({ q: this.q - 1, r: this.r }),
+        ]
+    }
+
+    public static from_floats(q: number, r: number): Position {
+        const q_grid = Math.round(q);
+        const r_grid = Math.round(r);
+        q -= q_grid;
+        r -= r_grid;
+        if (Math.abs(q) >= Math.abs(r)) {
+            return new Position({ q: q_grid + Math.round(q + 0.5 * r), r: r_grid });
+        }
+        else {
+            return new Position({ q: q_grid, r: r_grid + Math.round(r + 0.5 * q) });
+        }
+    }
+
+    public static from_pixels(x: number, y: number): Position {
+        return Position.from_floats(
+            (Math.sqrt(3) / 3 * x - 1 / 3 * y) / state.gridSize,
+            (2 / 3 * y) / state.gridSize
+        )
+    }
 }
 
 
@@ -118,14 +157,21 @@ export class Task {
 
 
 export enum StructureType {
-    Invalid = "",
+    Null = "",
     TownHall = "town_hall",
     ArrowTower = "arrow_tower",
 }
 
 
+export enum EntityType {
+    Unit = "unit",
+    Resource = "resource",
+    Structure = "structure",
+}
+
+
 export class Entity {
-    entity_type: string;
+    entity_type: EntityType;
     id: string;
     name: string;
     position: Position;
@@ -133,8 +179,8 @@ export class Entity {
     max_hp: number;
     image?: string;
 
+    unit_type: UnitType;
     tasks: Task[];
-    job: Job;
     gathering_rate: number;
     carried_resource: ResourceType;
     carry_amount: number;
@@ -149,7 +195,7 @@ export class Entity {
         this.id = data.id;
         this.name = data.name;
         this.position = new Position(data.position);
-        this.job = data.job;
+        this.unit_type = data.unit_type;
         this.gathering_rate = data.gathering_rate;
         this.resource_type = data.resource_type;
         this.tasks = [];
@@ -172,8 +218,11 @@ export class Game {
     player: string;
     state: GameState;
     entities: { [id: string]: Entity };
+    resources: { [id: string]: Entity };
     structures: { [id: string]: Entity };
-    workers: { [id: string]: Entity };
+    units: { [id: string]: Entity };
+
+    map: { [position: string]: Entity };
 
     food: number;
     gold: number;
@@ -186,16 +235,27 @@ export class Game {
         this.player = data.player;
         this.state = data.state;
         this.entities = {};
-        for (const [entityId, entity] of Object.entries(data.entities)) {
-            this.entities[entityId] = new Entity(entity);
-        }
+        this.resources = {};
         this.structures = {};
-        for (const entityId of Object.keys(data.structures)) {
-            this.structures[entityId] = this.entities[entityId];
+        this.units = {};
+        this.map = {};
+        for (const [entityId, rawEntity] of Object.entries(data.entities)) {
+            const entity = new Entity(rawEntity);
+            this.map[entity.position.toKey()] = entity;
+            this.entities[entityId] = entity;
+            if (entity.entity_type == EntityType.Unit) {
+                this.units[entityId] = entity;
+            }
+            else if (entity.entity_type == EntityType.Resource) {
+                this.resources[entityId] = entity;
+            }
+            else if (entity.entity_type == EntityType.Structure) {
+                this.structures[entityId] = entity;
+            }
         }
-        this.workers = {};
-        for (const entityId of Object.keys(data.workers)) {
-            this.workers[entityId] = this.entities[entityId];
+        const origin = new Position({ q: 0, r: 0 });
+        for (const neighbor of origin.neighbors) {
+            this.map[neighbor.toKey()] = this.map[origin.toKey()];
         }
         this.food = data.food;
         this.gold = data.gold;

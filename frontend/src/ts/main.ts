@@ -3,6 +3,7 @@ import { state } from "./state.ts";
 import { client } from "./api.ts";
 import { GridFilter } from "./filters.ts";
 import * as channelSelect from "./channel_select.ts";
+import { dispatch } from "./events.ts";
 
 
 function createGrid(
@@ -126,6 +127,7 @@ async function Main() {
         gridFilter.uniforms.uScale = state.camera.scale.x;
         gridFilter.uniforms.uTranslation.x = state.camera.x;
         gridFilter.uniforms.uTranslation.y = state.camera.y;
+        dispatch("scale", state.camera.scale.x);
     });
 
     // Initialize client

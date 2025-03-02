@@ -20,7 +20,7 @@ def generate_id() -> str:
 
 
 class ResourceType(StrEnum):
-    Invalid = ""
+    Null = ""
     Food = "food"
     Gold = "gold"
     Stone = "stone"
@@ -31,8 +31,9 @@ resource_types = [*ResourceType]
 resource_types.pop(0)
 
 
-class Job(StrEnum):
-    Invalid = ""
+class UnitType(StrEnum):
+    Null = ""
+
     Miner = "miner"
     Farmer = "farmer"
     Lumberjack = "lumberjack"
@@ -42,30 +43,33 @@ class Job(StrEnum):
     Merchant = "merchant"
     Scout = "scout"
 
-resource_production: dict[Job, list[tuple[ResourceType, float]]] = {
-    Job.Miner: [
+    Voidling = "voidling"
+
+
+resource_production: dict[UnitType, list[tuple[ResourceType, float]]] = {
+    UnitType.Miner: [
         (ResourceType.Stone, 1.0),
         (ResourceType.Gold, 0.1),
     ],
-    Job.Farmer: [
+    UnitType.Farmer: [
         (ResourceType.Food, 1.0),
     ],
-    Job.Lumberjack: [
+    UnitType.Lumberjack: [
         (ResourceType.Wood, 1.0),
     ],
-    Job.Enchanter: [
+    UnitType.Enchanter: [
         (ResourceType.Aether, 1.0),
         (ResourceType.Gold, 0.1),
     ],
-    Job.Builder: [],
-    Job.Militia: [],
-    Job.Merchant: [
+    UnitType.Builder: [],
+    UnitType.Militia: [],
+    UnitType.Merchant: [
         (ResourceType.Gold, 1.0),
     ],
-    Job.Scout: [],
+    UnitType.Scout: [],
 }
-jobs = [*Job]
-jobs.pop(0)
+unit_types = [*UnitType]
+unit_types.pop(0)
 
 
 class GameState(StrEnum):
@@ -186,15 +190,21 @@ class Task(BaseModel):
 
 
 class EntityType(StrEnum):
-    Worker = "worker"
+    Unit = "unit"
     Resource = "resource"
     Structure = "structure"
 
 
 class StructureType(StrEnum):
-    Invalid = ""
+    Null = ""
     TownHall = "town_hall"
     ArrowTower = "arrow_tower"
+
+
+class Alignment(IntEnum):
+    Neutral = 0
+    Player = 1
+    Enemy = 2
 
 
 class Entity(BaseModel):
@@ -202,47 +212,87 @@ class Entity(BaseModel):
     id: str = Field(default_factory=generate_id)
     name: str = "<Unknown>"
     position: Position
-    hp: int = 1
-    max_hp: int = 1
+    hp: float = 1
+    max_hp: float = 1
     image: Optional[str] = None
+    alignment: Alignment = Alignment.Neutral
     # Structure Attributes
-    structure_type: StructureType = StructureType.Invalid
-    # Worker Attributes
-    carried_resource: ResourceType = ResourceType.Invalid
+    structure_type: StructureType = StructureType.Null
+    # Unit Attributes
+    unit_type: UnitType = UnitType.Null
+    carried_resource: ResourceType = ResourceType.Null
     carry_amount: int = 0
     carry_capacity: int = 25
     tasks: list[Task] = Field(default_factory=list)
-    job: Job = Job.Invalid
     gathering_rate: float = 1.0
+    action_cooldown: float = 1.0
     time_until_action: float = 1.0
     # Resource Attributes
-    resource_type: ResourceType = ResourceType.Invalid
+    resource_type: ResourceType = ResourceType.Null
 
     async def on_tick(self, game: Game, delta: float):
-        if self.entity_type == EntityType.Worker:
-            await self.worker_tick(game, delta)
+        if self.entity_type == EntityType.Unit:
+            await self.on_unit_tick(game, delta)
+        if self.entity_type == EntityType.Structure:
+            await self.on_structure_tick(game, delta)
 
-    async def worker_tick(self, game: Game, delta: float):
+    async def on_structure_tick(self, game: Game, delta: float):
         if self.time_until_action > 0:
             self.time_until_action -= delta
             return
-        self.time_until_action = (950 + random.randint(0, 100))/1000
-        if self.job != Job.Invalid:
-            await self.job_worker_tick(game)
-        else:
-            await self.manual_worker_tick(game)
+        self.time_until_action = random.uniform(self.action_cooldown - 0.05, self.action_cooldown + 0.05)
 
-    async def job_worker_tick(self, game: Game):
-        if self.position.magnitude <= 2 and self.carried_resource != ResourceType.Invalid:
+        if self.structure_type == StructureType.ArrowTower:
+            enemy = self.find_enemy_nearby(game, 6)
+            if enemy is None:
+                return
+            await game.handle_attack(self, enemy, random.uniform(4.5, 5.5))
+
+    async def on_unit_tick(self, game: Game, delta: float):
+        if self.time_until_action > 0:
+            self.time_until_action -= delta
+            return
+        self.time_until_action = random.uniform(self.action_cooldown - 0.05, self.action_cooldown + 0.05)
+
+        if self.alignment == Alignment.Player:
+            await self.on_worker_tick(game)
+        elif self.alignment == Alignment.Enemy:
+            await self.on_enemy_tick(game)
+
+    async def on_enemy_tick(self, game: Game):
+        if self.unit_type == UnitType.Voidling:
+            vision_range = 6
+            attack_range = 1
+            damage = (2.5, 3)
+        else:
+            return
+
+        # Check for an enemy in attack range
+
+        # Check for an enemy nearby
+        enemy = self.find_enemy_nearby(game, vision_range)
+        if enemy is None:
+            await self.move_toward(Position(0, 0), game)
+            return
+
+        # If close enough to the enemy, attack them
+        if self.position.distance(enemy.position) <= attack_range:
+            await game.handle_attack(self, enemy, random.uniform(*damage))
+        # If not, move closer
+        else:
+            await self.move_toward(enemy.position, game)
+
+    async def on_worker_tick(self, game: Game):
+        if self.position.magnitude <= 2 and self.carried_resource != ResourceType.Null:
             task = game.add_resource(self.carried_resource, self.carry_amount)
             self.carry_amount = 0
-            self.carried_resource = ResourceType.Invalid
+            self.carried_resource = ResourceType.Null
             await task
 
         if self.carry_amount == self.carry_capacity:
-            await self.path_to(Position(0,0).neighbors, game)
+            await self.move_toward(Position(0, 0), game)
 
-        elif self.job == Job.Builder:
+        elif self.unit_type == UnitType.Builder:
             # Find nearest damaged structure
             target = None
             lowest_distance = None
@@ -258,19 +308,18 @@ class Entity(BaseModel):
                 if lowest_distance == 1:
                     structure.hp = min(structure.hp + 5, structure.max_hp)
                 else:
-                    await self.path_to(structure.position, game)
+                    await self.move_toward(structure.position, game)
 
-        elif self.job == Job.Lumberjack:
+        elif self.unit_type == UnitType.Lumberjack:
             await self.gather(ResourceType.Wood, game)
 
-        elif self.job == Job.Miner:
+        elif self.unit_type == UnitType.Miner:
             await self.gather(ResourceType.Stone, game)
 
-        elif self.job == Job.Farmer:
+        elif self.unit_type == UnitType.Farmer:
             await self.gather(ResourceType.Food, game)
 
     async def gather(self, resource_type: ResourceType, game: Game):
-        target_position = None
         for position in self.position.flood_fill():
             entity = game.map.get(position)
             if entity is None:
@@ -287,18 +336,25 @@ class Entity(BaseModel):
                 self.carried_resource = resource_type
             self.carry_amount += 5
         else:
-            await self.path_to(target_position, game)
+            await self.move_toward(target_position, game)
 
-    async def path_to(self, target_position: Position | Iterable[Position], game: Game):
-        if isinstance(target_position, Position):
-            target_position = (target_position,)
-        path = game.path_between(self.position, target_position)
+    def find_enemy_nearby(self, game: Game, limit: int = 20) -> Optional[Entity]:
+        for position in self.position.flood_fill(limit):
+            entity = game.map.get(position)
+            if entity is None:
+                continue
+            if entity.alignment == Alignment.Neutral:
+                continue
+            if entity.alignment != self.alignment:
+                return entity
+        return None
+
+    async def move_toward(self, target_position: Position, game: Game, limit: int = 20) -> bool:
+        path = game.path_between(self.position, target_position, limit)
         if not path:
-            return
+            return False
         await game.move_entity(self, path[0])
-
-    async def manual_worker_tick(self, game: Game):
-        pass
+        return True
 
 
 class Game(BaseModel):
@@ -306,11 +362,15 @@ class Game(BaseModel):
     player: str
     state: GameState = GameState.Lobby
     entities: dict[str, Entity] = Field(default_factory=dict)
-    structures: dict[str, Entity] = Field(default_factory=dict)
-    workers: dict[str, Entity] = Field(default_factory=dict)
 
+    resources: dict[str, Entity] = Field(default_factory=dict, exclude=True)
+    structures: dict[str, Entity] = Field(default_factory=dict, exclude=True)
+    units: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     map: dict[Position, Entity] = Field(default_factory=dict, exclude=True)
     subscribers: set[Connection] = Field(default_factory=set, exclude=True)
+
+    spawn_cooldown: float = 5.0
+    time_until_spawn: float = 10.0
 
     food: float = 100.0
     gold: float = 100.0
@@ -328,28 +388,66 @@ class Game(BaseModel):
         self.subscribers -= broken_connections
 
     async def on_tick(self, delta: float):
-        for worker in self.workers.values():
-            await worker.on_tick(self, delta)
-        for structure in self.structures.values():
+        for unit in tuple(self.units.values()):
+            await unit.on_tick(self, delta)
+        for structure in tuple(self.structures.values()):
             await structure.on_tick(self, delta)
 
+        self.time_until_spawn -= delta
+        if self.time_until_spawn <= 0:
+            self.time_until_spawn = random.uniform(self.spawn_cooldown - 0.05, self.spawn_cooldown + 0.05)
+            await self.spawn_enemy()
+
+    async def spend(self, *costs: tuple[ResourceType, int]):
+        for resource_type, amount in costs:
+            available = getattr(self, str(resource_type))
+            if available < amount:
+                raise ClientError(f"not enough {resource_type}")
+        for resource_type, amount in costs:
+            setattr(self, str(resource_type), available - amount)
+            await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": -amount})
+
     async def add_resource(self, resource_type: ResourceType, amount: int):
-        if resource_type == ResourceType.Food:
-            self.food += amount
-        elif resource_type == ResourceType.Gold:
-            self.gold += amount
-        elif resource_type == ResourceType.Stone:
-            self.stone += amount
-        elif resource_type == ResourceType.Wood:
-            self.wood += amount
-        elif resource_type == ResourceType.Aether:
-            self.aether += amount
+        setattr(self, str(resource_type), getattr(self, str(resource_type)) + amount)
         await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": amount})
+
+    async def handle_attack(self, attacker: Entity, target: Entity, amount: float):
+        target.hp -= amount
+        if target.hp < 0:
+            target.hp = 0
+
+        await self.broadcast({
+            "type": "entity/update",
+            "id": target.id,
+            "hp": target.hp,
+            "source": attacker.id,
+        })
+
+        if target.hp == 0:
+            await self.remove_entity(target)
+
+
+    async def spawn_enemy(self) -> Entity:
+        return await self.add_entity(Entity(
+            entity_type=EntityType.Unit,
+            unit_type=UnitType.Voidling,
+            alignment=Alignment.Enemy,
+            name="Voidling",
+            hp=5,
+            max_hp=5,
+            position=Position(
+                10 + random.randint(0, 10) * random.choice((-1, 1)),
+                10 + random.randint(0, 10) * random.choice((-1, 1))
+            ),
+        ))
 
     async def place_town_hall(self):
         town_hall = await self.add_entity(Entity(
             entity_type=EntityType.Structure,
             structure_type=StructureType.TownHall,
+            alignment=Alignment.Player,
+            hp=100,
+            max_hp=100,
             position=Position(0,0)
         ))
         for position in Position(0,0).neighbors:
@@ -359,7 +457,18 @@ class Game(BaseModel):
         await self.add_entity(Entity(
             entity_type=EntityType.Structure,
             structure_type=StructureType.ArrowTower,
+            alignment=Alignment.Player,
+            hp=10,
+            max_hp=10,
             position=Position(0,-3)
+        ))
+        await self.add_entity(Entity(
+            entity_type=EntityType.Structure,
+            structure_type=StructureType.ArrowTower,
+            alignment=Alignment.Player,
+            hp=10,
+            max_hp=10,
+            position=Position(0, 3)
         ))
 
     async def generate_resources(self):
@@ -386,26 +495,32 @@ class Game(BaseModel):
         self.map[entity.position] = entity
         if entity.entity_type == EntityType.Structure:
             self.structures[entity.id] = entity
-        elif entity.entity_type == EntityType.Worker:
-            self.workers[entity.id] = entity
+        elif entity.entity_type == EntityType.Unit:
+            self.units[entity.id] = entity
+        elif entity.entity_type == EntityType.Resource:
+            self.resources[entity.id] = entity
         await self.broadcast({"type": "entity/add", "entity": entity.model_dump(mode="json")})
         return entity
 
     async def move_entity(self, entity: Entity, position: Position):
+        if entity.position == position:
+            return
         if position in self.map:
             raise ValueError("position is occupied")
         self.map.pop(entity.position, None)
         entity.position = position
         self.map[entity.position] = entity
-        await self.broadcast({"type": "entity/move", "id": entity.id, "position": position.model_dump()})
+        await self.broadcast({"type": "entity/update", "id": entity.id, "position": position.model_dump()})
 
     async def remove_entity(self, entity: Entity):
         self.entities.pop(entity.id, None)
         self.map.pop(entity.position, None)
         if entity.entity_type == EntityType.Structure:
             self.structures.pop(entity.id, None)
-        elif entity.entity_type == EntityType.Worker:
-            self.workers.pop(entity.id, None)
+        elif entity.entity_type == EntityType.Unit:
+            self.units.pop(entity.id, None)
+        elif entity.entity_type == EntityType.Resource:
+            self.resources.pop(entity.id, None)
         await self.broadcast({"type": "entity/remove", "id": entity.id})
 
     def empty_space_near(self, starting_position: Position) -> Position:
@@ -413,10 +528,19 @@ class Game(BaseModel):
             if position not in self.map:
                 return position
 
-    def path_between(self, start_position: Position, target_positions: Iterable[Position], limit: int = None) -> list[Position]:
+    def resolve_path(self, start_position: Position, target_position: Position, previous_positions: dict[Position, Position]):
+        path = []
+        cursor = target_position
+        while cursor != start_position:
+            path.append(cursor)
+            cursor = previous_positions[cursor]
+        path.reverse()
+        return path
+
+    def path_between(self, start_position: Position, target_position: Position, limit: int = 20) -> list[Position]:
         already_visited: set[Position] = {start_position}
         current_positions: list[Position] = [start_position]
-        previous_positions: dict[Position, Position] = {}
+        previous_positions: dict[Position, Position] = {start_position: None}
         distance = 0
         while current_positions:
             next_positions: list[Position] = []
@@ -424,26 +548,26 @@ class Game(BaseModel):
                 for neighbor in position.neighbors:
                     if neighbor not in previous_positions:
                         previous_positions[neighbor] = position
-                    if neighbor in target_positions:
-                        path = []
-                        cursor = neighbor
-                        while cursor != start_position:
-                            path.append(cursor)
-                            cursor = previous_positions[cursor]
-                        path.reverse()
-                        return path
+                    if neighbor == target_position:
+                        return self.resolve_path(start_position, target_position, previous_positions)
                     if neighbor in already_visited:
                         continue
                     if neighbor in self.map:
                         continue
                     already_visited.add(neighbor)
                     next_positions.append(neighbor)
-
             current_positions = next_positions
             if limit is not None and distance >= limit:
-                return None
+                break
             distance += 1
-        return None
+        closest_viable_target = None
+        best_distance = None
+        for potential_target in already_visited:
+            distance = potential_target.distance(target_position)
+            if best_distance is None or distance < best_distance:
+                closest_viable_target = potential_target
+                best_distance = distance
+        return self.resolve_path(start_position, closest_viable_target, previous_positions)
 
 
 games: dict[str, Game] = {}
@@ -506,6 +630,30 @@ async def handle_game_subscribe(connection: Connection, request: GameRequest):
     request.game.subscribers.add(connection)
 
     return {"type": "success"}
+
+
+class BuildRequest(GameRequest):
+    position: Position
+
+
+@register("game/build/arrow_tower")
+async def handle_build_tower(connection: Connection, request: BuildRequest):
+    if request.game.player != connection.user.id:
+        raise AuthError("insufficient permissions")
+
+    if request.position in request.game.map:
+        raise ClientError("position is occupied")
+
+    await request.game.spend([ResourceType.Wood, 100], [ResourceType.Stone, 100])
+
+    await request.game.add_entity(Entity(
+        entity_type=EntityType.Structure,
+        structure_type=StructureType.ArrowTower,
+        alignment=Alignment.Player,
+        hp=10,
+        max_hp=10,
+        position=request.position,
+    ))
 
 
 async def game_thread():

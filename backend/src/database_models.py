@@ -33,6 +33,11 @@ class User(DatabaseEntry):
         self.link_code = generate_link_code()
 
 
+class Chatter(DatabaseEntry):
+    twitch_id: str
+    job: str
+
+
 class Channel(DatabaseEntry):
     twitch_id: str
     name: str
