@@ -234,6 +234,7 @@ export class Game {
     map: { [position: string]: Entity };
     spawn_points: Position[];
     enemyCount: number;
+    revealed_area: any[];
 
     food: number;
     gold: number;
@@ -278,5 +279,15 @@ export class Game {
         this.wood = data.wood;
         this.aether = data.aether;
         this.spawn_points = data.spawn_points;
+        this.revealed_area = data.revealed_area;
+    }
+
+    reveal() {
+        const positions = [];
+        for (const point of this.revealed_area[0]) {
+            positions.push({x: point[0], y: point[1]});
+        }
+        state.mask.poly(positions);
+        state.mask.fill({color: "#ffffff"});
     }
 }

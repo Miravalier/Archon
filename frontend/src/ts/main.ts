@@ -61,7 +61,9 @@ async function Main() {
     state.app.stage.addChild(gridContainer);
 
     // Initialize Camera
+    state.mask = state.app.stage.addChild(new Graphics());
     state.camera = state.app.stage.addChild(new Container());
+    state.app.stage.mask = state.mask;
 
     // Add canvas pan listeners
     state.app.canvas.addEventListener("mousedown", mouseDownEvent => {
@@ -74,6 +76,8 @@ async function Main() {
             const deltaY = mouseMoveEvent.y - position.y;
             state.camera.x += deltaX;
             state.camera.y += deltaY;
+            state.mask.x += deltaX;
+            state.mask.y += deltaY;
             gridFilter.uniforms.uTranslation = new Point(state.camera.x, state.camera.y);
             position = { x: mouseMoveEvent.clientX, y: mouseMoveEvent.clientY };
         };
@@ -124,6 +128,9 @@ async function Main() {
         state.camera.y *= zoomDelta;
         state.camera.x += state.app.canvas.width / 2;
         state.camera.y += state.app.canvas.height / 2;
+        state.mask.x = state.camera.x;
+        state.mask.y = state.camera.y;
+        state.mask.scale = state.camera.scale;
         gridFilter.uniforms.uScale = state.camera.scale.x;
         gridFilter.uniforms.uTranslation.x = state.camera.x;
         gridFilter.uniforms.uTranslation.y = state.camera.y;

@@ -6,14 +6,28 @@ import traceback
 from bson import ObjectId
 from enum import IntEnum, StrEnum
 from math import sqrt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.functional_validators import BeforeValidator
+from pydantic.functional_serializers import PlainSerializer
+from shapely import Polygon, geometry
 from typing import Annotated, Any, Optional
 
 from .errors import AuthError, ClientError
 from .handlers import register
 from .pqueue import PriorityQueue
 from .request_models import Connection, Channel, ChannelRequest
+
+
+GRID_SIZE = 100
+
+
+def shape_to_coordinates(shape):
+    return geometry.mapping(shape)["coordinates"]
+
+
+GamePolygon = Annotated[
+    Polygon, PlainSerializer(shape_to_coordinates, return_type=tuple)
+]
 
 
 def generate_id() -> str:
@@ -88,6 +102,14 @@ class Position(BaseModel):
     @property
     def s(self):
         return -self.q - self.r
+    
+    @property
+    def x(self):
+        return GRID_SIZE * 1.5 * (sqrt(3) * self.q + sqrt(3)/2 * self.r)
+
+    @property
+    def y(self):
+        return GRID_SIZE * 1.5 * (3 / 2 * self.r)
 
     @property
     def neighbors(self) -> list[Position]:
@@ -188,11 +210,11 @@ class Position(BaseModel):
                 results.append(Position(q=self.q+i, r=self.r+j))
 
     @classmethod
-    def from_pixels(cls, x: float, y: float, grid_size: float) -> Position:
+    def from_pixels(cls, x: float, y: float) -> Position:
         # For pointy-top hexes
         return cls.from_floats(
-            (sqrt(3)/3 * x - 1/3 * y) / grid_size,
-            (2/3 * y) / grid_size
+            (sqrt(3)/3 * x - 1/3 * y) / GRID_SIZE,
+            (2/3 * y) / GRID_SIZE
         )
 
 
@@ -235,6 +257,7 @@ class Entity(BaseModel):
     max_hp: float = 1
     image: Optional[str] = None
     alignment: Alignment = Alignment.Neutral
+    vision_size: int = 10
     # Structure Attributes
     structure_type: StructureType = StructureType.Null
     # Unit Attributes
@@ -387,9 +410,31 @@ class Entity(BaseModel):
         else:
             await game.assign_path(self, path)
         return True
+    
+
+def create_hexagon(position: Position, size: int) -> Polygon:
+    positions: list[Position] = [
+        Position(q=position.q, r=position.r-size),
+        Position(q=position.q+size, r=position.r-size),
+        Position(q=position.q+size, r=position.r),
+        Position(q=position.q, r=position.r+size),
+        Position(q=position.q-size, r=position.r+size),
+        Position(q=position.q-size, r=position.r),
+        Position(q=position.q, r=position.r-size),
+    ]
+    vertices: list[tuple[int, int]] = []
+    for position in positions:
+        vertices.append([position.x, position.y])
+    return Polygon(vertices)
+    
+
+def generate_starting_vision() -> Polygon:
+    return create_hexagon(Position(0,0), 12).normalize()
 
 
 class Game(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str # Same ID as the associated channel
     player: str
     state: GameState = GameState.Lobby
@@ -404,6 +449,7 @@ class Game(BaseModel):
 
     spawn_cooldown: float = 5.0
     time_until_spawn: float = 10.0
+    spawn_points: list[Position] = Field(default_factory=list)
 
     food: float = 1000.0
     gold: float = 1000.0
@@ -417,7 +463,7 @@ class Game(BaseModel):
     max_q: int = Field(0, exclude=True)
     max_r: int = Field(0, exclude=True)
     max_s: int = Field(0, exclude=True)
-    spawn_points: list[Position] = Field(default_factory=list)
+    revealed_area: GamePolygon = Field(default_factory=generate_starting_vision)
 
     async def generate_spawn_points(self):
         standoff = 30
@@ -547,6 +593,16 @@ class Game(BaseModel):
                             ResourceType.Wood,
                         ])
                     ))
+        valid_positions = [p for p in Position(0,0).flood_fill(limit=6) if p not in self.map]
+        for resource_type in [ResourceType.Stone, ResourceType.Food, ResourceType.Wood]:
+            position = random.choice(valid_positions)
+            valid_positions.remove(position)
+            await self.add_entity(Entity(
+                entity_type=EntityType.Resource,
+                position=position,
+                resource_type=resource_type
+            ))
+        
 
     async def add_entity(self, entity: Entity) -> Entity:
         self.entities[entity.id] = entity
@@ -578,6 +634,8 @@ class Game(BaseModel):
             self.units[entity.id] = entity
         elif entity.entity_type == EntityType.Resource:
             self.resources[entity.id] = entity
+        if entity.alignment == Alignment.Player:
+            await self.add_vision(entity)
         await self.broadcast({"type": "entity/add", "entity": entity.model_dump(mode="json")})
         return entity
 
@@ -589,6 +647,8 @@ class Game(BaseModel):
         self.map.pop(entity.position, None)
         entity.position = position
         self.map[entity.position] = entity
+        if entity.alignment == Alignment.Player:
+            await self.add_vision(entity)
         await self.broadcast({"type": "entity/update", "id": entity.id, "position": position.model_dump()})
 
     async def remove_entity(self, entity: Entity):
@@ -601,6 +661,13 @@ class Game(BaseModel):
         elif entity.entity_type == EntityType.Resource:
             self.resources.pop(entity.id, None)
         await self.broadcast({"type": "entity/remove", "id": entity.id})
+
+    async def add_vision(self, entity: Entity):
+        new_area = self.revealed_area.union(create_hexagon(entity.position, entity.vision_size))
+        if new_area == self.revealed_area:
+            return
+        self.revealed_area = new_area
+        await self.broadcast({"type": "reveal", "area": shape_to_coordinates(self.revealed_area)})
 
     async def assign_path(self, entity: Entity, path: list[Position]):
         path.reverse()

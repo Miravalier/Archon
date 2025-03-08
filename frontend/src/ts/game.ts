@@ -309,6 +309,9 @@ export async function activate(channel_id: string) {
     } catch (e) {
         game = await client.createGame(channel_id);
     }
+    globalThis.game = game;
+
+    game.reveal();
 
     const infoRegion = overlay.appendChild(document.createElement("div"));
     infoRegion.classList.add("info-region");
@@ -437,6 +440,11 @@ export async function activate(channel_id: string) {
                 sprite.removeFromParent();
             }, 100);
         }
+    });
+
+    client.subscribe("reveal", async data => {
+        game.revealed_area = data.area;
+        game.reveal();
     });
 
     client.subscribe("resource", async data => {
