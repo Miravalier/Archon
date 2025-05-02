@@ -3,6 +3,7 @@ import { state } from "./state.ts";
 import { client } from "./api.ts";
 import { GridFilter } from "./filters.ts";
 import { dispatch } from "./events.ts";
+import * as Game from "./game.ts";
 
 
 function createGrid(
@@ -143,7 +144,27 @@ async function Main() {
     console.log("[!] Loading Complete");
 
     // Put create game / join game buttons
-    // TODO
+    const overlay = document.querySelector("#overlay");
+    overlay.innerHTML = "";
+
+    const mainMenu = overlay.appendChild(document.createElement("div"));
+    mainMenu.classList.add("main-menu");
+
+    const createGameButton = mainMenu.appendChild(document.createElement("button"));
+    createGameButton.textContent = "Create Game";
+    const joinGameInput = mainMenu.appendChild(document.createElement("input"));
+    const joinGameButton = mainMenu.appendChild(document.createElement("button"));
+    joinGameButton.textContent = "Join Game";
+
+    joinGameButton.addEventListener("click", async () => {
+        const game = await client.getGame(joinGameInput.value);
+        Game.activate(game.id);
+    });
+
+    createGameButton.addEventListener("click", async () => {
+        const game = await client.createGame();
+        Game.activate(game.id);
+    });
 }
 
 

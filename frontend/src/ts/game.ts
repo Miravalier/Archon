@@ -215,15 +215,6 @@ const resourceIcons = {
 };
 
 
-const validCommands = [
-    "!join",
-    "!job builder",
-    "!job farmer",
-    "!job lumberjack",
-    "!job miner",
-];
-
-
 export async function activate(game_id: string) {
     console.log("[!] Game View Page");
 
@@ -249,17 +240,17 @@ export async function activate(game_id: string) {
         resourceAmounts[resourceType] = resourceAmount;
     }
 
-    const commandsBar = overlay.appendChild(document.createElement("div"));
-    commandsBar.classList.add("commands-bar");
-    for (const validCommand of validCommands) {
-        const commandText = commandsBar.appendChild(document.createElement("div"));
-        commandText.classList.add("command");
-        commandText.textContent = validCommand;
-    }
-
     let placingStructure: boolean = false;
     const buildBar = overlay.appendChild(document.createElement("div"));
     buildBar.classList.add("build-bar");
+
+    const farmerButton = buildBar.appendChild(document.createElement("img"));
+    farmerButton.src = "/stone.png";
+    farmerButton.classList.add("build-button");
+    farmerButton.addEventListener("click", async () => {
+        client.send({ "type": "game/build/farmer", "game": game_id });
+    });
+
     const arrowButton = buildBar.appendChild(document.createElement("img"));
     arrowButton.src = "/arrow-tower.png";
     arrowButton.classList.add("build-button");
@@ -303,18 +294,15 @@ export async function activate(game_id: string) {
 
     state.camera.removeChildren();
 
-    let game: Game;
-    try {
-        game = await client.getGame(game_id);
-    } catch (e) {
-        game = await client.createGame(game_id);
-    }
+    let game = await client.getGame(game_id);
     globalThis.game = game;
 
     game.reveal();
 
     const infoRegion = overlay.appendChild(document.createElement("div"));
     infoRegion.classList.add("info-region");
+    const gameIdText = infoRegion.appendChild(document.createElement("div"));
+    gameIdText.textContent = `Join ID: ${game.id}`;
     const enemiesPerWaveText = infoRegion.appendChild(document.createElement("div"));
     enemiesPerWaveText.textContent = `Enemies/Wave: ${Math.floor(game.spawn_points.length / 90)}`;
     const enemyCountText = infoRegion.appendChild(document.createElement("div"));
@@ -356,67 +344,64 @@ export async function activate(game_id: string) {
     });
 
     client.subscribe("entity/update", async data => {
-        if (!game.entities[data.id]) {
-            return;
-        }
-        const entity = game.entities[data.id];
+        for (const entityUpdate of data.entities) {
+            const entity = new Entity(entityUpdate);
+            const oldEntity = game.entities[entity.id];
+            game.entities[entity.id] = entity;
 
-        if (data.position) {
-            delete game.map[entity.position.toKey()];
-            entity.position = new Position(data.position);
+            delete game.map[oldEntity.position.toKey()];
             game.map[entity.position.toKey()] = entity;
 
-            if (!sprites[data.id]) {
-                return;
-            }
-            const [sprite, _] = sprites[data.id];
-            const startX = sprite.x;
-            const startY = sprite.y;
-            const endX = entity.position.x;
-            const endY = entity.position.y;
-            const durationMs = 300;
-            let t = 0;
-            const moveHandler = (ticker: Ticker) => {
-                t += ticker.elapsedMS / durationMs;
-                if (t >= 1) {
-                    sprite.x = endX;
-                    sprite.y = endY;
-                    ticker.remove(moveHandler);
+            if (sprites[entity.id] && entity.position != oldEntity.position) {
+                const [sprite, _] = sprites[entity.id];
+                const startX = sprite.x;
+                const startY = sprite.y;
+                const endX = entity.position.x;
+                const endY = entity.position.y;
+                const durationMs = 300;
+                let t = 0;
+                const moveHandler = (ticker: Ticker) => {
+                    t += ticker.elapsedMS / durationMs;
+                    if (t >= 1) {
+                        sprite.x = endX;
+                        sprite.y = endY;
+                        ticker.remove(moveHandler);
+                    }
+                    else {
+                        sprite.x = lerp(startX, endX, t);
+                        sprite.y = lerp(startY, endY, t);
+                    }
                 }
-                else {
-                    sprite.x = lerp(startX, endX, t);
-                    sprite.y = lerp(startY, endY, t);
-                }
-            }
-            state.app.ticker.add(moveHandler);
-        }
-
-        if (typeof data.hp !== "undefined") {
-            const source = game.entities[data.source];
-            if (source) {
-                let target_x: number;
-                let target_y: number;
-                if (!sprites[data.id]) {
-                    target_x = entity.position.x;
-                    target_y = entity.position.y;
-                }
-                else {
-                    const [sprite, _] = sprites[data.id];
-                    target_x = sprite.x;
-                    target_y = sprite.y;
-                }
-                const attack = new Graphics();
-                attack.moveTo(source.position.x, source.position.y);
-                attack.lineTo(target_x, target_y);
-                attack.stroke({ color: "#0060ff", width: 4 });
-                state.camera.addChild(attack);
-                setTimeout(() => {
-                    attack.removeFromParent();
-                }, 100);
+                state.app.ticker.add(moveHandler);
             }
 
-            entity.hp = data.hp;
             setHealthPercent(entity.id, entity.hp / entity.max_hp);
+        }
+    });
+
+    client.subscribe("entity/attack", async data => {
+        const source = game.entities[data.source];
+        const target = game.entities[data.target];
+        if (source) {
+            let target_x: number;
+            let target_y: number;
+            if (!sprites[data.target]) {
+                target_x = target.position.x;
+                target_y = target.position.y;
+            }
+            else {
+                const [sprite, _] = sprites[data.target];
+                target_x = sprite.x;
+                target_y = sprite.y;
+            }
+            const attack = new Graphics();
+            attack.moveTo(source.position.x, source.position.y);
+            attack.lineTo(target_x, target_y);
+            attack.stroke({ color: "#0060ff", width: 4 });
+            state.camera.addChild(attack);
+            setTimeout(() => {
+                attack.removeFromParent();
+            }, 100);
         }
     });
 

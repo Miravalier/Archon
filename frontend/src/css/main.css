@@ -39,6 +39,10 @@ body {
     pointer-events: auto;
 }
 
+.info-region {
+    pointer-events: auto;
+}
+
 .resource-bar {
     position: absolute;
     left: 0;
@@ -89,4 +93,18 @@ body {
     cursor: pointer;
     pointer-events: auto;
     margin: 4px;
+}
+
+.main-menu {
+    pointer-events: auto;
+    display: flex;
+    flex-flow: column nowrap;
+}
+
+.main-menu button {
+    color: black;
+}
+
+.main-menu input {
+    color: black;
 }

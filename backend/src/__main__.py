@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from .errors import AuthError, ClientError
 from .game import game_thread
 from .subscriptions import router as subscriptions_router
-from .twitch import router as twitch_router
+# from .twitch import router as twitch_router
 
 
 tasks: list[asyncio.Task] = []
@@ -40,7 +40,7 @@ async def handle_client_error(_: Request, exc: ClientError):
 
 
 app.include_router(subscriptions_router)
-app.include_router(twitch_router)
+# app.include_router(twitch_router)
 
 
 if __name__ == '__main__':

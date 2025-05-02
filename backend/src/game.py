@@ -258,7 +258,7 @@ class Entity(BaseModel):
     image: Optional[str] = None
     alignment: Alignment = Alignment.Neutral
     vision_size: int = 10
-    time_since_update: float = 0.0
+    time_until_update: float = 0.0
     # Structure Attributes
     structure_type: StructureType = StructureType.Null
     # Unit Attributes
@@ -275,8 +275,11 @@ class Entity(BaseModel):
     resource_type: ResourceType = ResourceType.Null
 
     async def on_tick(self, game: Game, delta: float):
-        if self.time_since_update >= 5.0:
+        if self.time_until_update <= 0.0:
             game.queue_update(self)
+        else:
+            self.time_until_update -= delta
+
         if self.entity_type == EntityType.Unit:
             await self.on_unit_tick(game, delta)
         if self.entity_type == EntityType.Structure:
@@ -507,10 +510,13 @@ class Game(BaseModel):
 
     async def on_tick(self, delta: float):
         if self.inactive:
-            self.time_since_active += delta
-            if self.time_since_active > 30.0:
-                self.end()
-            return
+            if self.subscribers:
+                self.inactive = False
+            else:
+                self.time_since_active += delta
+                if self.time_since_active > 30.0:
+                    self.end()
+                return
 
         if not self.subscribers:
             self.inactive = True
@@ -534,6 +540,7 @@ class Game(BaseModel):
             if entity is None:
                 continue
             serialized_entities.append(entity.model_dump(mode="json"))
+            entity.time_until_update = random.uniform(5.0, 6.0)
         self.queued_updates.clear()
         await self.broadcast({"type": "entity/update", "entities": serialized_entities})
 
@@ -557,6 +564,7 @@ class Game(BaseModel):
 
         await self.broadcast({
             "type": "entity/attack",
+            "visual": "laser",
             "source": attacker.id,
             "target": target.id,
         })
@@ -564,7 +572,7 @@ class Game(BaseModel):
         if target.hp == 0:
             await self.remove_entity(target)
         else:
-            self.queue_update(target.id)
+            self.queue_update(target)
 
     async def spawn_enemy(self) -> Entity:
         return await self.add_entity(Entity(
@@ -682,7 +690,7 @@ class Game(BaseModel):
         if entity.alignment == Alignment.Player:
             await self.add_vision(entity)
 
-        self.queue_update(entity.id)
+        self.queue_update(entity)
 
     async def remove_entity(self, entity: Entity):
         self.entities.pop(entity.id, None)
@@ -838,6 +846,18 @@ async def handle_game_subscribe(connection: Connection, request: GameRequest):
 
 class BuildRequest(GameRequest):
     position: Position
+
+
+@register("game/build/farmer")
+async def handle_buy_farmer(connection: Connection, request: GameRequest):
+    await request.game.spend([ResourceType.Gold, 100])
+
+    await request.game.add_entity(Entity(
+        entity_type=EntityType.Unit,
+        alignment=Alignment.Player,
+        position=request.game.empty_space_near(Position(0,0)),
+        unit_type=UnitType.Farmer,
+    ))
 
 
 @register("game/build/arrow_tower")
