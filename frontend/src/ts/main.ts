@@ -2,7 +2,6 @@ import { Application, Color, Container, Graphics, Point } from "pixi.js";
 import { state } from "./state.ts";
 import { client } from "./api.ts";
 import { GridFilter } from "./filters.ts";
-import * as channelSelect from "./channel_select.ts";
 import { dispatch } from "./events.ts";
 
 
@@ -143,8 +142,8 @@ async function Main() {
 
     console.log("[!] Loading Complete");
 
-    // Initialize channel select
-    await channelSelect.activate();
+    // Put create game / join game buttons
+    // TODO
 }
 
 

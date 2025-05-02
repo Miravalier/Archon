@@ -1,5 +1,6 @@
 import pymongo
 from bson import ObjectId
+from bson.errors import InvalidId
 from pydantic import BaseModel, ValidationError
 from pymongo import ReturnDocument
 from pymongo.collection import Collection
@@ -93,15 +94,21 @@ class DocumentCollection(Generic[M]):
     def find_one(self, filter: Union[dict, str, M, None]) -> M:
         if filter is None:
             return None
-        return self.post_process_result(self.collection.find_one(self.pre_process_filter(filter)))
+        try:
+            return self.post_process_result(self.collection.find_one(self.pre_process_filter(filter)))
+        except InvalidId:
+            return None
 
     def find(self, filter: Union[dict, str, M, None] = None, *args, **kwargs) -> List[M]:
         return [self.post_process_result(document) for document in self.collection.find(self.pre_process_filter(filter), *args, **kwargs)]
 
-    def delete_one(self, filter: Union[dict, str, M, None] = None, *args, **kwargs):
-        return self.collection.delete_one(self.pre_process_filter(filter), *args, **kwargs).deleted_count != 0
+    def delete_one(self, filter: Union[dict, str, M, None] = None, *args, **kwargs) -> bool:
+        try:
+            return self.collection.delete_one(self.pre_process_filter(filter), *args, **kwargs).deleted_count != 0
+        except InvalidId:
+            return False
 
-    def delete_many(self, filter: Union[dict, str, M, None] = None, *args, **kwargs):
+    def delete_many(self, filter: Union[dict, str, M, None] = None, *args, **kwargs) -> int:
         return self.collection.delete_many(self.pre_process_filter(filter), *args, **kwargs).deleted_count
 
     def find_one_and_update(self, filter: Union[dict, str, M, None], update: dict, *args, **kwargs) -> M:
@@ -136,5 +143,4 @@ db = client.archon_db
 
 # Collections
 users = DocumentCollection(db.users, database_models.User)
-channels = DocumentCollection(db.channels, database_models.Channel)
 chatters = DocumentCollection(db.chatters, database_models.Chatter)

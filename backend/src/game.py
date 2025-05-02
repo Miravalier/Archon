@@ -12,10 +12,10 @@ from pydantic.functional_serializers import PlainSerializer
 from shapely import Polygon, geometry
 from typing import Annotated, Any, Optional
 
-from .errors import AuthError, ClientError
+from .errors import ClientError
 from .handlers import register
 from .pqueue import PriorityQueue
-from .request_models import Connection, Channel, ChannelRequest
+from .request_models import Connection
 
 
 GRID_SIZE = 100
@@ -102,7 +102,7 @@ class Position(BaseModel):
     @property
     def s(self):
         return -self.q - self.r
-    
+
     @property
     def x(self):
         return GRID_SIZE * 1.5 * (sqrt(3) * self.q + sqrt(3)/2 * self.r)
@@ -258,6 +258,7 @@ class Entity(BaseModel):
     image: Optional[str] = None
     alignment: Alignment = Alignment.Neutral
     vision_size: int = 10
+    time_since_update: float = 0.0
     # Structure Attributes
     structure_type: StructureType = StructureType.Null
     # Unit Attributes
@@ -274,6 +275,8 @@ class Entity(BaseModel):
     resource_type: ResourceType = ResourceType.Null
 
     async def on_tick(self, game: Game, delta: float):
+        if self.time_since_update >= 5.0:
+            game.queue_update(self)
         if self.entity_type == EntityType.Unit:
             await self.on_unit_tick(game, delta)
         if self.entity_type == EntityType.Structure:
@@ -410,7 +413,7 @@ class Entity(BaseModel):
         else:
             await game.assign_path(self, path)
         return True
-    
+
 
 def create_hexagon(position: Position, size: int) -> Polygon:
     positions: list[Position] = [
@@ -426,7 +429,7 @@ def create_hexagon(position: Position, size: int) -> Polygon:
     for position in positions:
         vertices.append([position.x, position.y])
     return Polygon(vertices)
-    
+
 
 def generate_starting_vision() -> Polygon:
     return create_hexagon(Position(0,0), 12).normalize()
@@ -435,18 +438,20 @@ def generate_starting_vision() -> Polygon:
 class Game(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    id: str # Same ID as the associated channel
-    player: str
-    state: GameState = GameState.Lobby
+    id: str
+    owner: str
+    inactive: bool = False
     entities: dict[str, Entity] = Field(default_factory=dict)
+    state: GameState = GameState.Lobby
 
-    channel: Channel = Field(exclude=True)
     resources: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     structures: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     units: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     map: dict[Position, Entity] = Field(default_factory=dict, exclude=True)
     subscribers: set[Connection] = Field(default_factory=set, exclude=True)
+    queued_updates: set[str] = Field(default_factory=set, exclude=True)
 
+    time_since_active: float = 0.0
     spawn_cooldown: float = 5.0
     time_until_spawn: float = 10.0
     spawn_points: list[Position] = Field(default_factory=list)
@@ -464,6 +469,12 @@ class Game(BaseModel):
     max_r: int = Field(0, exclude=True)
     max_s: int = Field(0, exclude=True)
     revealed_area: GamePolygon = Field(default_factory=generate_starting_vision)
+
+    def end(self):
+        games.pop(self.id, None)
+
+    def queue_update(self, entity: Entity):
+        self.queued_updates.add(entity.id)
 
     async def generate_spawn_points(self):
         standoff = 30
@@ -495,6 +506,17 @@ class Game(BaseModel):
         self.subscribers -= broken_connections
 
     async def on_tick(self, delta: float):
+        if self.inactive:
+            self.time_since_active += delta
+            if self.time_since_active > 30.0:
+                self.end()
+            return
+
+        if not self.subscribers:
+            self.inactive = True
+            self.time_since_active = 0.0
+            return
+
         for unit in tuple(self.units.values()):
             await unit.on_tick(self, delta)
         for structure in tuple(self.structures.values()):
@@ -505,6 +527,15 @@ class Game(BaseModel):
             self.time_until_spawn = random.uniform(self.spawn_cooldown - 0.05, self.spawn_cooldown + 0.05)
             for _ in range(len(self.spawn_points) // 90):
                 await self.spawn_enemy()
+
+        serialized_entities = []
+        for entity_id in self.queued_updates:
+            entity = self.entities.get(entity_id, None)
+            if entity is None:
+                continue
+            serialized_entities.append(entity.model_dump(mode="json"))
+        self.queued_updates.clear()
+        await self.broadcast({"type": "entity/update", "entities": serialized_entities})
 
     async def spend(self, *costs: tuple[ResourceType, int]):
         for resource_type, amount in costs:
@@ -525,14 +556,15 @@ class Game(BaseModel):
             target.hp = 0
 
         await self.broadcast({
-            "type": "entity/update",
-            "id": target.id,
-            "hp": target.hp,
+            "type": "entity/attack",
             "source": attacker.id,
+            "target": target.id,
         })
 
         if target.hp == 0:
             await self.remove_entity(target)
+        else:
+            self.queue_update(target.id)
 
     async def spawn_enemy(self) -> Entity:
         return await self.add_entity(Entity(
@@ -602,7 +634,7 @@ class Game(BaseModel):
                 position=position,
                 resource_type=resource_type
             ))
-        
+
 
     async def add_entity(self, entity: Entity) -> Entity:
         self.entities[entity.id] = entity
@@ -649,7 +681,8 @@ class Game(BaseModel):
         self.map[entity.position] = entity
         if entity.alignment == Alignment.Player:
             await self.add_vision(entity)
-        await self.broadcast({"type": "entity/update", "id": entity.id, "position": position.model_dump()})
+
+        self.queue_update(entity.id)
 
     async def remove_entity(self, entity: Entity):
         self.entities.pop(entity.id, None)
@@ -779,26 +812,12 @@ class GameRequest(BaseModel):
 
 @register("user/get")
 async def handle_user_get(connection: Connection):
-    return connection.user.model_dump()
-
-
-@register("channel/get")
-async def handle_channel_get(connection: Connection, request: ChannelRequest):
-    if request.channel.id not in connection.user.linked_channels:
-        raise AuthError("channel not linked")
-
-    return request.channel.model_dump()
+    return connection.user.model_dump(mode="json")
 
 
 @register("game/create")
-async def handle_game_create(connection: Connection, request: ChannelRequest):
-    if request.channel.id not in connection.user.linked_channels:
-        raise AuthError("channel not linked")
-
-    if request.channel.id in games:
-        raise ClientError("channel already has a game")
-
-    game = Game(id=request.channel.id, player=connection.user.id, channel=request.channel)
+async def handle_game_create(connection: Connection):
+    game = Game(id=generate_id(), owner=connection.user.id)
     await game.place_town_hall()
     await game.generate_resources()
     games[game.id] = game
@@ -807,17 +826,11 @@ async def handle_game_create(connection: Connection, request: ChannelRequest):
 
 @register("game/get")
 async def handle_game_get(connection: Connection, request: GameRequest):
-    if connection.user.id not in request.game.channel.linked_users:
-        raise AuthError("insufficient permissions")
-
-    return request.game.model_dump()
+    return request.game.model_dump(mode="json")
 
 
 @register("game/subscribe")
 async def handle_game_subscribe(connection: Connection, request: GameRequest):
-    if connection.user.id not in request.game.channel.linked_users:
-        raise AuthError("insufficient permissions")
-
     request.game.subscribers.add(connection)
 
     return {"type": "success"}
@@ -829,9 +842,6 @@ class BuildRequest(GameRequest):
 
 @register("game/build/arrow_tower")
 async def handle_build_tower(connection: Connection, request: BuildRequest):
-    if connection.user.id not in request.game.channel.linked_users:
-        raise AuthError("insufficient permissions")
-
     if request.position in request.game.map:
         raise ClientError("position is occupied")
 

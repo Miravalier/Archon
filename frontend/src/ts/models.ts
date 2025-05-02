@@ -53,29 +53,13 @@ export class DatabaseEntry {
 export class User extends DatabaseEntry {
     token: string;
     name: string;
-    linked_channels: { [id: string]: Permission };
     link_code: string;
 
     constructor(data) {
         super(data);
         this.token = data.token;
         this.name = data.name;
-        this.linked_channels = data.linked_channels;
         this.link_code = data.link_code;
-    }
-}
-
-
-export class Channel extends DatabaseEntry {
-    twitch_id: string;
-    name: string;
-    linked_users: { [id: string]: Permission };
-
-    constructor(data) {
-        super(data);
-        this.twitch_id = data.twitch_id;
-        this.name = data.name;
-        this.linked_users = data.linked_users;
     }
 }
 

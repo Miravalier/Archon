@@ -1,5 +1,5 @@
 import { TimedFuture, Future, Sleep } from "./async.ts";
-import { Channel, Game, User } from "./models.ts";
+import { Game, User } from "./models.ts";
 
 
 export interface WebsocketMessage {
@@ -210,12 +210,8 @@ export class Client {
         return new User(await this.send({ type: "user/get" }));
     }
 
-    async getChannel(channel_id: string): Promise<Channel> {
-        return new Channel(await this.send({ type: "channel/get", channel: channel_id }));
-    }
-
-    async createGame(channel_id: string): Promise<Game> {
-        return new Game(await this.send({ type: "game/create", channel: channel_id }));
+    async createGame(): Promise<Game> {
+        return new Game(await this.send({ type: "game/create" }));
     }
 
     async getGame(game_id: string): Promise<Game> {

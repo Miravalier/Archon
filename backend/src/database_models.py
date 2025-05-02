@@ -26,7 +26,6 @@ def generate_link_code() -> str:
 class User(DatabaseEntry):
     token: str
     name: Optional[str] = None
-    linked_channels: dict[str, Permission] = Field(default_factory=dict)
     link_code: str = Field(default_factory=generate_link_code)
 
     def regenerate_link_code(self):
@@ -36,9 +35,3 @@ class User(DatabaseEntry):
 class Chatter(DatabaseEntry):
     twitch_id: str
     job: str
-
-
-class Channel(DatabaseEntry):
-    twitch_id: str
-    name: str
-    linked_users: dict[str, Permission] = Field(default_factory=dict)

@@ -224,7 +224,7 @@ const validCommands = [
 ];
 
 
-export async function activate(channel_id: string) {
+export async function activate(game_id: string) {
     console.log("[!] Game View Page");
 
     const canvas = document.querySelector("canvas");
@@ -297,7 +297,7 @@ export async function activate(channel_id: string) {
             sprite.removeFromParent();
             controller.abort();
             placingStructure = false;
-            client.send({ "type": "game/build/arrow_tower", "game": channel_id, "position": { q: hexPosition.q, r: hexPosition.r } });
+            client.send({ "type": "game/build/arrow_tower", "game": game_id, "position": { q: hexPosition.q, r: hexPosition.r } });
         }, { signal: controller.signal });
     });
 
@@ -305,9 +305,9 @@ export async function activate(channel_id: string) {
 
     let game: Game;
     try {
-        game = await client.getGame(channel_id);
+        game = await client.getGame(game_id);
     } catch (e) {
-        game = await client.createGame(channel_id);
+        game = await client.createGame(game_id);
     }
     globalThis.game = game;
 
@@ -330,9 +330,9 @@ export async function activate(channel_id: string) {
     }
 
     // Subscribe to game updates
-    await client.subscribeToGame(channel_id);
+    await client.subscribeToGame(game_id);
     client.subscribe("connect", async () => {
-        await client.subscribeToGame(channel_id);
+        await client.subscribeToGame(game_id);
     });
 
     client.subscribe("entity/add", async data => {
