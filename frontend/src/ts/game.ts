@@ -1,7 +1,7 @@
 import { Assets, Graphics, Text, Container, Sprite, Ticker } from "pixi.js";
 import { state } from "./state.ts";
 import { client } from "./api.ts";
-import { Alignment, Entity, Game, Position, EntityType, ResourceType, StructureType, UnitType } from "./models.ts";
+import { Alignment, Entity, Game, Position, EntityType, ResourceType } from "./models.ts";
 
 
 function lerp(a: number, b: number, t: number): number {
@@ -156,13 +156,10 @@ async function onEntityCreate(game: Game, entity: Entity) {
         let icon: string | string[] = "/unknown.png";
         let tint: number | number[] = 0xffffff;
         let size: number = 200;
-        if (entity.structure_type == StructureType.TownHall) {
-            icon = "/castle.png";
-            size = 500;
-        }
-        if (entity.structure_type == StructureType.ArrowTower) {
-            icon = ["/tower.png", "/arrow-tower.png"];
-            tint = [0xffffff, 0x00a0ff];
+        if (entity.image) {
+            icon = entity.image.split(",");
+            size = entity.size;
+            tint = entity.tint;
         }
         [sprite, data] = await makeSprite({ url: icon, tint, size });
         hpVisible = true;
@@ -171,9 +168,6 @@ async function onEntityCreate(game: Game, entity: Entity) {
         let icon: string = "/unknown.png";
         if (entity.image) {
             icon = entity.image;
-        }
-        else if (entity.unit_type == UnitType.Voidling) {
-            icon = "/voidling.png";
         }
         const spriteMask = new Graphics();
         spriteMask.circle(0, 0, 100);
@@ -245,7 +239,7 @@ export async function activate(game_id: string) {
     buildBar.classList.add("build-bar");
 
     const farmerButton = buildBar.appendChild(document.createElement("img"));
-    farmerButton.src = "/stone.png";
+    farmerButton.src = "/farmer.png";
     farmerButton.classList.add("build-button");
     farmerButton.addEventListener("click", async () => {
         client.send({ "type": "game/build/farmer", "game": game_id });
@@ -303,8 +297,6 @@ export async function activate(game_id: string) {
     infoRegion.classList.add("info-region");
     const gameIdText = infoRegion.appendChild(document.createElement("div"));
     gameIdText.textContent = `Join ID: ${game.id}`;
-    const enemiesPerWaveText = infoRegion.appendChild(document.createElement("div"));
-    enemiesPerWaveText.textContent = `Enemies/Wave: ${Math.floor(game.spawn_points.length / 90)}`;
     const enemyCountText = infoRegion.appendChild(document.createElement("div"));
     enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
 
@@ -435,9 +427,5 @@ export async function activate(game_id: string) {
     client.subscribe("resource", async data => {
         game[data.resource_type] += data.amount;
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
-    });
-
-    client.subscribe("spawn-resize", async data => {
-        enemiesPerWaveText.textContent = `Enemies/Wave: ${Math.floor(data.size / 90)}`;
     });
 }

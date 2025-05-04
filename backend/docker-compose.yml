@@ -23,8 +23,6 @@ services:
       archon:
         ipv4_address: 10.247.92.11
     restart: unless-stopped
-    ports:
-      - 127.0.0.1:27017:27017
     volumes:
       - ${DATA_ROOT}/db:/data/db
     expose:

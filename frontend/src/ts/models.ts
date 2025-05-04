@@ -169,6 +169,8 @@ export class Entity {
     hp: number;
     max_hp: number;
     image?: string;
+    size: number;
+    tint: number;
     alignment: Alignment;
 
     unit_type: UnitType;
@@ -202,6 +204,8 @@ export class Entity {
         this.structure_type = data.structure_type;
         this.image = data.image;
         this.alignment = data.alignment;
+        this.size = data.size;
+        this.tint = data.tint;
     }
 }
 

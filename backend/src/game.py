@@ -3,6 +3,7 @@ import asyncio
 import random
 import time
 import traceback
+import yaml
 from bson import ObjectId
 from enum import IntEnum, StrEnum
 from math import sqrt
@@ -36,6 +37,7 @@ def generate_id() -> str:
 
 class ResourceType(StrEnum):
     Null = ""
+
     Food = "food"
     Gold = "gold"
     Stone = "stone"
@@ -61,28 +63,6 @@ class UnitType(StrEnum):
     Voidling = "voidling"
 
 
-resource_production: dict[UnitType, list[tuple[ResourceType, float]]] = {
-    UnitType.Miner: [
-        (ResourceType.Stone, 1.0),
-        (ResourceType.Gold, 0.1),
-    ],
-    UnitType.Farmer: [
-        (ResourceType.Food, 1.0),
-    ],
-    UnitType.Lumberjack: [
-        (ResourceType.Wood, 1.0),
-    ],
-    UnitType.Enchanter: [
-        (ResourceType.Aether, 1.0),
-        (ResourceType.Gold, 0.1),
-    ],
-    UnitType.Builder: [],
-    UnitType.Militia: [],
-    UnitType.Merchant: [
-        (ResourceType.Gold, 1.0),
-    ],
-    UnitType.Scout: [],
-}
 unit_types = [*UnitType]
 unit_types.pop(0)
 
@@ -240,6 +220,7 @@ class StructureType(StrEnum):
     Null = ""
     TownHall = "town_hall"
     ArrowTower = "arrow_tower"
+    Portal = "portal"
 
 
 class Alignment(IntEnum):
@@ -255,10 +236,12 @@ class Entity(BaseModel):
     position: Position
     hp: float = 1
     max_hp: float = 1
-    image: Optional[str] = None
     alignment: Alignment = Alignment.Neutral
     vision_size: int = 10
     time_until_update: float = 0.0
+    image: Optional[str] = None # Comma separated list of PNGs
+    tint: int = 0xFFFFFF # Comma separated RGB tint list applied to images
+    size: int = 200 # Size of image in pixels
     # Structure Attributes
     structure_type: StructureType = StructureType.Null
     # Unit Attributes
@@ -296,6 +279,17 @@ class Entity(BaseModel):
             if enemy is None:
                 return
             await game.handle_attack(self, enemy, random.uniform(4.5, 5.5))
+        elif self.structure_type == StructureType.Portal:
+            await game.add_entity(Entity(
+                entity_type=EntityType.Unit,
+                unit_type=UnitType.Voidling,
+                alignment=self.alignment,
+                name="Voidling",
+                hp=5,
+                max_hp=5,
+                position=game.empty_space_near(self.position),
+                image="/voidling.png",
+            ))
 
     async def on_unit_tick(self, game: Game, delta: float):
         if self.time_until_action > 0:
@@ -455,9 +449,6 @@ class Game(BaseModel):
     queued_updates: set[str] = Field(default_factory=set, exclude=True)
 
     time_since_active: float = 0.0
-    spawn_cooldown: float = 5.0
-    time_until_spawn: float = 10.0
-    spawn_points: list[Position] = Field(default_factory=list)
 
     food: float = 1000.0
     gold: float = 1000.0
@@ -465,12 +456,6 @@ class Game(BaseModel):
     wood: float = 1000.0
     aether: float = 1000.0
 
-    min_q: int = Field(0, exclude=True)
-    min_r: int = Field(0, exclude=True)
-    min_s: int = Field(0, exclude=True)
-    max_q: int = Field(0, exclude=True)
-    max_r: int = Field(0, exclude=True)
-    max_s: int = Field(0, exclude=True)
     revealed_area: GamePolygon = Field(default_factory=generate_starting_vision)
 
     def end(self):
@@ -479,25 +464,25 @@ class Game(BaseModel):
     def queue_update(self, entity: Entity):
         self.queued_updates.add(entity.id)
 
-    async def generate_spawn_points(self):
-        standoff = 30
+    def generate_spawn_points(self, distance: int = 30) -> list[Position]:
         cube_pairs = [
-            {"s": self.max_s + standoff, "r": self.min_r - standoff},
-            {"r": self.min_r - standoff, "q": self.max_q + standoff},
-            {"q": self.max_q + standoff, "s": self.min_s - standoff},
-            {"s": self.min_s - standoff, "r": self.max_r + standoff},
-            {"r": self.max_r + standoff, "q": self.min_q - standoff},
-            {"q": self.min_q - standoff, "s": self.max_s + standoff},
-            {"s": self.max_s + standoff, "r": self.min_r - standoff},
+            {"s": distance, "r": -distance},
+            {"r": -distance, "q": distance},
+            {"q": distance, "s": -distance},
+            {"s": -distance, "r": distance},
+            {"r": distance, "q": -distance},
+            {"q": -distance, "s": distance},
+            {"s": distance, "r": -distance},
         ]
-        self.spawn_points: list[Position] = []
+        spawn_points: set[Position] = set()
         previous_position = None
         for pair in cube_pairs:
             position = Position.from_cube(**pair)
             if previous_position is not None:
-                self.spawn_points.extend(previous_position.line_to(position))
+                for between_position in previous_position.line_to(position):
+                    spawn_points.add(between_position)
             previous_position = position
-        await self.broadcast({"type": "spawn-resize", "size": len(self.spawn_points)})
+        return list(spawn_points)
 
     async def broadcast(self, message: Any):
         broken_connections: set[Connection] = set()
@@ -527,12 +512,6 @@ class Game(BaseModel):
             await unit.on_tick(self, delta)
         for structure in tuple(self.structures.values()):
             await structure.on_tick(self, delta)
-
-        self.time_until_spawn -= delta
-        if self.time_until_spawn <= 0:
-            self.time_until_spawn = random.uniform(self.spawn_cooldown - 0.05, self.spawn_cooldown + 0.05)
-            for _ in range(len(self.spawn_points) // 90):
-                await self.spawn_enemy()
 
         serialized_entities = []
         for entity_id in self.queued_updates:
@@ -574,17 +553,6 @@ class Game(BaseModel):
         else:
             self.queue_update(target)
 
-    async def spawn_enemy(self) -> Entity:
-        return await self.add_entity(Entity(
-            entity_type=EntityType.Unit,
-            unit_type=UnitType.Voidling,
-            alignment=Alignment.Enemy,
-            name="Voidling",
-            hp=5,
-            max_hp=5,
-            position=self.empty_space_near(random.choice(self.spawn_points)),
-        ))
-
     async def place_town_hall(self):
         town_hall = await self.add_entity(Entity(
             entity_type=EntityType.Structure,
@@ -592,27 +560,40 @@ class Game(BaseModel):
             alignment=Alignment.Player,
             hp=100,
             max_hp=100,
-            position=Position(0,0)
+            position=Position(0,0),
+            image="/castle.png",
+            size=500,
         ))
         for position in Position(0,0).neighbors:
             self.map[position] = town_hall
 
-        # DBG
+        spawn_points = self.generate_spawn_points()
+
         await self.add_entity(Entity(
             entity_type=EntityType.Structure,
-            structure_type=StructureType.ArrowTower,
-            alignment=Alignment.Player,
-            hp=10,
-            max_hp=10,
-            position=Position(0,-3)
+            structure_type=StructureType.Portal,
+            alignment=Alignment.Enemy,
+            hp=100,
+            max_hp=100,
+            action_cooldown=5.0,
+            time_until_action=5.0,
+            position=random.choice(spawn_points),
+            image="/portal.png",
         ))
-        await self.add_entity(Entity(
+
+        # DBG
+        await self.add_arrow_tower(Position(0, -3))
+        await self.add_arrow_tower(Position(0, 3))
+
+    async def add_arrow_tower(self, position: Position):
+        return await self.add_entity(Entity(
             entity_type=EntityType.Structure,
             structure_type=StructureType.ArrowTower,
             alignment=Alignment.Player,
             hp=10,
             max_hp=10,
-            position=Position(0, 3)
+            position=position,
+            image="/tower.png,/arrow-tower.png",
         ))
 
     async def generate_resources(self):
@@ -649,27 +630,6 @@ class Game(BaseModel):
         self.map[entity.position] = entity
         if entity.entity_type == EntityType.Structure:
             self.structures[entity.id] = entity
-            spawn_area_grown = False
-            if entity.position.q < self.min_q:
-                self.min_q = entity.position.q
-                spawn_area_grown = True
-            if entity.position.r < self.min_r:
-                self.min_r = entity.position.r
-                spawn_area_grown = True
-            if entity.position.s < self.min_s:
-                self.min_s = entity.position.s
-                spawn_area_grown = True
-            if entity.position.q > self.max_q:
-                self.max_q = entity.position.q
-                spawn_area_grown = True
-            if entity.position.r > self.max_r:
-                self.max_r = entity.position.r
-                spawn_area_grown = True
-            if entity.position.s > self.max_s:
-                self.max_s = entity.position.s
-                spawn_area_grown = True
-            if spawn_area_grown:
-                await self.generate_spawn_points()
         elif entity.entity_type == EntityType.Unit:
             self.units[entity.id] = entity
         elif entity.entity_type == EntityType.Resource:
@@ -857,6 +817,8 @@ async def handle_buy_farmer(connection: Connection, request: GameRequest):
         alignment=Alignment.Player,
         position=request.game.empty_space_near(Position(0,0)),
         unit_type=UnitType.Farmer,
+        image="/farmer.png",
+        name="Farmer",
     ))
 
 
@@ -866,15 +828,7 @@ async def handle_build_tower(connection: Connection, request: BuildRequest):
         raise ClientError("position is occupied")
 
     await request.game.spend([ResourceType.Wood, 100], [ResourceType.Stone, 100])
-
-    await request.game.add_entity(Entity(
-        entity_type=EntityType.Structure,
-        structure_type=StructureType.ArrowTower,
-        alignment=Alignment.Player,
-        hp=10,
-        max_hp=10,
-        position=request.position,
-    ))
+    await request.game.add_arrow_tower(request.position)
 
 
 async def game_thread():
