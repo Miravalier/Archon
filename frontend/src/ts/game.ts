@@ -1,11 +1,46 @@
-import { Assets, Graphics, Text, Container, Sprite, Ticker } from "pixi.js";
-import { state } from "./state.ts";
+import { Assets, Graphics, Text, Container, Sprite } from "pixi.js";
+import { addOnTick, removeOnTick, state } from "./state.ts";
 import { client } from "./api.ts";
-import { Alignment, Entity, Game, Position, EntityType, ResourceType } from "./models.ts";
+import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
+
+
+const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
+
+
+const resourceIcons = {
+    [ResourceType.Wood]: "/wood.png",
+    [ResourceType.Stone]: "/stone.png",
+    [ResourceType.Gold]: "/gold.png",
+    [ResourceType.Aether]: "/aether.png",
+    [ResourceType.Food]: "/food.png",
+};
+
+
+const sprites: { [id: string]: [Container, SpriteData] } = {};
 
 
 function lerp(a: number, b: number, t: number): number {
     return a + (b - a) * t;
+}
+
+
+function moveSprite(sprite: Container, position: Position, durationMs: number) {
+    const startX = sprite.x;
+    const startY = sprite.y;
+    const endX = position.x;
+    const endY = position.y;
+    let t = 0;
+    const onTickId = addOnTick((elapsedMs) => {
+        t += elapsedMs / durationMs;
+        if (t >= 1) {
+            sprite.x = endX;
+            sprite.y = endY;
+            removeOnTick(onTickId);
+        } else {
+            sprite.x = lerp(startX, endX, t);
+            sprite.y = lerp(startY, endY, t);
+        }
+    })
 }
 
 
@@ -121,9 +156,6 @@ function setHealthPercent(id: string, hpPercent: number) {
 }
 
 
-const sprites: { [id: string]: [Container, SpriteData] } = {};
-
-
 function addToBoard(item: Container, position: Position) {
     item.x = position.x;
     item.y = position.y;
@@ -134,46 +166,18 @@ function addToBoard(item: Container, position: Position) {
 async function onEntityCreate(game: Game, entity: Entity) {
     let sprite: Container;
     let data: SpriteData;
-    let hpVisible: boolean = false;
-    if (entity.entity_type == EntityType.Resource) {
-        let icon: string = "/unknown.png";
-        let tint: number = 0xffffff;
-        if (entity.resource_type == ResourceType.Food) {
-            icon = "/wheat.png";
-            tint = 0xffff00;
-        }
-        else if (entity.resource_type == ResourceType.Wood) {
-            icon = "/forest.png";
-            tint = 0x40a010;
-        }
-        else if (entity.resource_type == ResourceType.Stone) {
-            icon = "/rock.png";
-            tint = 0x808080;
-        }
-        [sprite, data] = await makeSprite({ url: icon, tint });
-    }
-    else if (entity.entity_type == EntityType.Structure) {
-        let icon: string | string[] = "/unknown.png";
-        let tint: number | number[] = 0xffffff;
-        let size: number = 200;
-        if (entity.image) {
-            icon = entity.image.split(",");
-            size = entity.size;
-            tint = entity.tint;
-        }
-        [sprite, data] = await makeSprite({ url: icon, tint, size });
-        hpVisible = true;
-    }
-    else if (entity.entity_type == EntityType.Unit) {
-        let icon: string = "/unknown.png";
-        if (entity.image) {
-            icon = entity.image;
-        }
-        const spriteMask = new Graphics();
-        spriteMask.circle(0, 0, 100);
-        spriteMask.fill(0xffffff);
-        [sprite, data] = await makeSprite({ url: icon, mask: spriteMask, label: entity.name });
 
+    let icon: string[] = ["/unknown.png"];
+    let tint: number = 0xffffff;
+    let size: number = 200;
+    if (entity.image) {
+        icon = entity.image.split(",");
+        tint = entity.tint;
+        size = entity.size;
+    }
+
+    if (entity.entityTag & (EntityTag.Unit|EntityTag.Structure)) {
+        [sprite, data] = await makeSprite({ url: icon, tint, size, label: entity.name });
         sprite.eventMode = "dynamic";
         const spriteLabel = sprite.getChildByLabel("label");
         sprite.addEventListener("mouseenter", () => {
@@ -183,30 +187,31 @@ async function onEntityCreate(game: Game, entity: Entity) {
                 spriteLabel.visible = false;
             }, { once: true });
         });
-        hpVisible = true;
+    } else {
+        [sprite, data] = await makeSprite({ url: icon, tint, size });
     }
-    else {
-        return;
-    }
-    sprites[entity.id] = [sprite, data];
+
+    game.map[entity.position.toKey()] = entity;
     game.entities[entity.id] = entity;
-    if (hpVisible) {
-        setHealthPercent(entity.id, entity.hp / entity.max_hp);
+    if (entity.entityTag & EntityTag.Unit) {
+        game.units[entity.id] = entity;
+        if (entity.alignment == Alignment.Enemy) {
+            game.enemyCount += 1;
+        }
+    }
+    if (entity.entityTag & EntityTag.Resource) {
+        game.resources[entity.id] = entity;
+    }
+    if (entity.entityTag & EntityTag.Structure) {
+        game.structures[entity.id] = entity;
+    }
+
+    sprites[entity.id] = [sprite, data];
+    if (entity.maxHp != 0) {
+        setHealthPercent(entity.id, entity.hp / entity.maxHp);
     }
     addToBoard(sprite, entity.position);
 }
-
-
-const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
-
-
-const resourceIcons = {
-    [ResourceType.Wood]: "/wood.png",
-    [ResourceType.Stone]: "/stone.png",
-    [ResourceType.Gold]: "/gold.png",
-    [ResourceType.Aether]: "/aether.png",
-    [ResourceType.Food]: "/food.png",
-};
 
 
 export async function activate(game_id: string) {
@@ -242,7 +247,7 @@ export async function activate(game_id: string) {
     farmerButton.src = "/farmer.png";
     farmerButton.classList.add("build-button");
     farmerButton.addEventListener("click", async () => {
-        client.send({ "type": "game/build/farmer", "game": game_id });
+        client.send({ "type": "game/train/worker", "game": game_id });
     });
 
     const arrowButton = buildBar.appendChild(document.createElement("img"));
@@ -297,8 +302,6 @@ export async function activate(game_id: string) {
     infoRegion.classList.add("info-region");
     const gameIdText = infoRegion.appendChild(document.createElement("div"));
     gameIdText.textContent = `Join ID: ${game.id}`;
-    const enemyCountText = infoRegion.appendChild(document.createElement("div"));
-    enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
 
     // Render the initial game state
     for (const entity of Object.values(game.entities)) {
@@ -317,67 +320,45 @@ export async function activate(game_id: string) {
 
     client.subscribe("entity/add", async data => {
         const entity = new Entity(data.entity);
-        game.map[entity.position.toKey()] = entity;
-        game.entities[entity.id] = entity;
-        if (entity.entity_type == EntityType.Unit) {
-            game.units[entity.id] = entity;
-            if (entity.alignment == Alignment.Enemy) {
-                game.enemyCount += 1;
-                enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
-            }
-        }
-        else if (entity.entity_type == EntityType.Resource) {
-            game.resources[entity.id] = entity;
-        }
-        else if (entity.entity_type == EntityType.Structure) {
-            game.structures[entity.id] = entity;
-        }
         await onEntityCreate(game, entity);
     });
 
     client.subscribe("entity/update", async data => {
         for (const entityUpdate of data.entities) {
-            const entity = new Entity(entityUpdate);
-            const oldEntity = game.entities[entity.id];
-            game.entities[entity.id] = entity;
-
-            delete game.map[oldEntity.position.toKey()];
-            game.map[entity.position.toKey()] = entity;
-
-            if (sprites[entity.id] && entity.position != oldEntity.position) {
-                const [sprite, _] = sprites[entity.id];
-                const startX = sprite.x;
-                const startY = sprite.y;
-                const endX = entity.position.x;
-                const endY = entity.position.y;
-                const durationMs = 300;
-                let t = 0;
-                const moveHandler = (ticker: Ticker) => {
-                    t += ticker.elapsedMS / durationMs;
-                    if (t >= 1) {
-                        sprite.x = endX;
-                        sprite.y = endY;
-                        ticker.remove(moveHandler);
-                    }
-                    else {
-                        sprite.x = lerp(startX, endX, t);
-                        sprite.y = lerp(startY, endY, t);
-                    }
-                }
-                state.app.ticker.add(moveHandler);
+            const entity = game.entities[entityUpdate.id];
+            if (!entity) {
+                return;
             }
 
-            setHealthPercent(entity.id, entity.hp / entity.max_hp);
+            // Update map
+            const oldPosition = entity.position;
+            entity.update(entityUpdate);
+
+            // Move entity
+            if (!entity.position.equals(oldPosition)) {
+                delete game.map[oldPosition.toKey()];
+                game.map[entity.position.toKey()] = entity;
+
+                // Move sprite
+                if (sprites[entity.id]) {
+                    const [sprite, _] = sprites[entity.id];
+                    moveSprite(sprite, entity.position, 300);
+                }
+            }
+
+            if (entity.maxHp != 0) {
+                setHealthPercent(entity.id, entity.hp / entity.maxHp);
+            }
         }
     });
 
     client.subscribe("entity/attack", async data => {
         const source = game.entities[data.source];
         const target = game.entities[data.target];
-        if (source) {
+        if (source && target) {
             let target_x: number;
             let target_y: number;
-            if (!sprites[data.target]) {
+            if (!sprites[target.id]) {
                 target_x = target.position.x;
                 target_y = target.position.y;
             }
@@ -399,15 +380,19 @@ export async function activate(game_id: string) {
 
     client.subscribe("entity/remove", async data => {
         const entity = game.entities[data.id];
-        delete game.map[entity.position.toKey()];
+
         delete game.entities[data.id];
         delete game.units[data.id];
         delete game.resources[data.id];
         delete game.structures[data.id];
 
-        if (entity.entity_type == EntityType.Unit && entity.alignment == Alignment.Enemy) {
+        if (!entity) {
+            return;
+        }
+        delete game.map[entity.position.toKey()];
+
+        if (entity.entityTag & EntityTag.Unit && entity.alignment == Alignment.Enemy) {
             game.enemyCount -= 1;
-            enemyCountText.textContent = `Enemies on Map: ${game.enemyCount}`;
         }
 
         if (sprites[data.id]) {
@@ -420,7 +405,7 @@ export async function activate(game_id: string) {
     });
 
     client.subscribe("reveal", async data => {
-        game.revealed_area = data.area;
+        game.revealedArea = data.area;
         game.reveal();
     });
 

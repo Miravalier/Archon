@@ -1,31 +1,6 @@
 import { state } from "./state.ts";
 
 
-export enum Permission {
-    Basic = 0,
-    Subscriber = 1,
-    VIP = 2,
-    Moderator = 3,
-    Broadcaster = 4,
-}
-
-
-export enum UnitType {
-    Null = "",
-
-    Miner = "miner",
-    Farmer = "farmer",
-    Lumberjack = "lumberjack",
-    Enchanter = "enchanter",
-    Builder = "builder",
-    Militia = "militia",
-    Merchant = "merchant",
-    Scout = "scout",
-
-    Voidling = "voidling",
-}
-
-
 export enum ResourceType {
     Null = "",
     Food = "food",
@@ -37,7 +12,15 @@ export enum ResourceType {
 
 
 export enum GameState {
-    Lobby = 0,
+    Lobby = "lobby",
+    Active = "active",
+}
+
+
+export enum EntityTag {
+    Unit = 1,
+    Resource = 2,
+    Structure = 4,
 }
 
 
@@ -53,13 +36,13 @@ export class DatabaseEntry {
 export class User extends DatabaseEntry {
     token: string;
     name: string;
-    link_code: string;
+    linkCode: string;
 
     constructor(data) {
         super(data);
         this.token = data.token;
         this.name = data.name;
-        this.link_code = data.link_code;
+        this.linkCode = data.link_code;
     }
 }
 
@@ -71,6 +54,10 @@ export class Position {
     constructor(data) {
         this.q = data.q;
         this.r = data.r;
+    }
+
+    equals(otherPosition: Position): boolean {
+        return this.q == otherPosition.q && this.r == otherPosition.r;
     }
 
     get s() {
@@ -122,38 +109,6 @@ export class Position {
 }
 
 
-export enum TaskType {
-    Move = 0,
-    Gather = 1,
-    Build = 2,
-}
-
-
-export class Task {
-    task_type: TaskType;
-    target: Position;
-
-    constructor(data) {
-        this.task_type = data.task_type;
-        this.target = data.target;
-    }
-}
-
-
-export enum StructureType {
-    Null = "",
-    TownHall = "town_hall",
-    ArrowTower = "arrow_tower",
-}
-
-
-export enum EntityType {
-    Unit = "unit",
-    Resource = "resource",
-    Structure = "structure",
-}
-
-
 export enum Alignment {
     Neutral = 0,
     Player = 1,
@@ -162,67 +117,66 @@ export enum Alignment {
 
 
 export class Entity {
-    entity_type: EntityType;
     id: string;
-    name: string;
+    template: boolean;
+    entityTag: EntityTag;
+    resourceType: ResourceType;
     position: Position;
+    name: string;
     hp: number;
-    max_hp: number;
-    image?: string;
-    size: number;
-    tint: number;
+    maxHp: number;
     alignment: Alignment;
-
-    unit_type: UnitType;
-    tasks: Task[];
-    gathering_rate: number;
-    carried_resource: ResourceType;
-    carry_amount: number;
-    carry_capacity: number;
-
-    structure_type: StructureType;
-
-    resource_type: ResourceType;
+    visionSize: number;
+    image?: string;
+    tint: number;
+    size: number;
 
     constructor(data) {
-        this.entity_type = data.entity_type;
         this.id = data.id;
-        this.name = data.name;
+        this.template = data.template;
+        this.entityTag = data.entity_tag;
         this.position = new Position(data.position);
-        this.unit_type = data.unit_type;
-        this.gathering_rate = data.gathering_rate;
-        this.resource_type = data.resource_type;
-        this.tasks = [];
-        for (const task of data.tasks) {
-            this.tasks.push(new Task(task));
-        }
-        this.carried_resource = data.carried_resource;
-        this.carry_amount = data.carry_amount;
-        this.carry_capacity = data.carry_capacity;
+        this.name = data.name;
         this.hp = data.hp;
-        this.max_hp = data.max_hp;
-        this.structure_type = data.structure_type;
-        this.image = data.image;
+        this.maxHp = data.max_hp;
         this.alignment = data.alignment;
-        this.size = data.size;
+        this.visionSize = data.vision_size;
+        this.image = data.image;
         this.tint = data.tint;
+        this.size = data.size;
+    }
+
+    update(data) {
+        if (this.id !== data.id) {
+            throw Error("entity update IDs did not match");
+        }
+        this.template = data.template;
+        this.entityTag = data.entity_tag;
+        this.position = new Position(data.position);
+        this.name = data.name;
+        this.hp = data.hp;
+        this.maxHp = data.max_hp;
+        this.alignment = data.alignment;
+        this.visionSize = data.vision_size;
+        this.image = data.image;
+        this.tint = data.tint;
+        this.size = data.size;
     }
 }
 
 
 export class Game {
     id: string;
-    player: string;
+    owner: string;
+    inactive: boolean;
     state: GameState;
     entities: { [id: string]: Entity };
     resources: { [id: string]: Entity };
     structures: { [id: string]: Entity };
     units: { [id: string]: Entity };
-
     map: { [position: string]: Entity };
-    spawn_points: Position[];
     enemyCount: number;
-    revealed_area: any[];
+    revealedArea: any[];
 
     food: number;
     gold: number;
@@ -232,7 +186,8 @@ export class Game {
 
     constructor(data) {
         this.id = data.id;
-        this.player = data.player;
+        this.owner = data.owner;
+        this.inactive = data.inactive;
         this.state = data.state;
         this.entities = {};
         this.resources = {};
@@ -244,16 +199,16 @@ export class Game {
             const entity = new Entity(rawEntity);
             this.map[entity.position.toKey()] = entity;
             this.entities[entityId] = entity;
-            if (entity.entity_type == EntityType.Unit) {
+            if (entity.entityTag & EntityTag.Unit) {
                 this.units[entityId] = entity;
                 if (entity.alignment == Alignment.Enemy) {
                     this.enemyCount += 1;
                 }
             }
-            else if (entity.entity_type == EntityType.Resource) {
+            else if (entity.entityTag & EntityTag.Resource) {
                 this.resources[entityId] = entity;
             }
-            else if (entity.entity_type == EntityType.Structure) {
+            else if (entity.entityTag & EntityTag.Structure) {
                 this.structures[entityId] = entity;
             }
         }
@@ -266,13 +221,12 @@ export class Game {
         this.stone = data.stone;
         this.wood = data.wood;
         this.aether = data.aether;
-        this.spawn_points = data.spawn_points;
-        this.revealed_area = data.revealed_area;
+        this.revealedArea = data.revealed_area;
     }
 
     reveal() {
         const positions = [];
-        for (const point of this.revealed_area[0]) {
+        for (const point of this.revealedArea[0]) {
             positions.push({x: point[0], y: point[1]});
         }
         state.mask.poly(positions);

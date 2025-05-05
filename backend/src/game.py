@@ -44,28 +44,6 @@ class ResourceType(StrEnum):
     Wood = "wood"
     Aether = "aether"
 
-resource_types = [*ResourceType]
-resource_types.pop(0)
-
-
-class UnitType(StrEnum):
-    Null = ""
-
-    Miner = "miner"
-    Farmer = "farmer"
-    Lumberjack = "lumberjack"
-    Enchanter = "enchanter"
-    Builder = "builder"
-    Militia = "militia"
-    Merchant = "merchant"
-    Scout = "scout"
-
-    Voidling = "voidling"
-
-
-unit_types = [*UnitType]
-unit_types.pop(0)
-
 
 class GameState(StrEnum):
     Lobby = "lobby"
@@ -76,7 +54,7 @@ class Position(BaseModel):
     q: int
     r: int
 
-    def __init__(self, q: int, r: int):
+    def __init__(self, q: int = 0, r: int = 0):
         super().__init__(q=q, r=r)
 
     @property
@@ -198,196 +176,250 @@ class Position(BaseModel):
         )
 
 
-class TaskType(IntEnum):
-    Move = 0
-    Gather = 1
-    Build = 2
-
-
-class Task(BaseModel):
-    task_type: TaskType
-    target: Position
-
-
-
-class EntityType(StrEnum):
-    Unit = "unit"
-    Resource = "resource"
-    Structure = "structure"
-
-
-class StructureType(StrEnum):
-    Null = ""
-    TownHall = "town_hall"
-    ArrowTower = "arrow_tower"
-    Portal = "portal"
+class EntityTag(IntEnum):
+    Unit = 1
+    Resource = 2
+    Structure = 4
 
 
 class Alignment(IntEnum):
-    Neutral = 0
-    Player = 1
-    Enemy = 2
+    Enemy = 0
+    Neutral = 1
+    Player = 2
 
 
-class Entity(BaseModel):
-    entity_type: EntityType
-    id: str = Field(default_factory=generate_id)
-    name: str = "<Unknown>"
-    position: Position
-    hp: float = 1
-    max_hp: float = 1
-    alignment: Alignment = Alignment.Neutral
-    vision_size: int = 10
-    time_until_update: float = 0.0
-    image: Optional[str] = None # Comma separated list of PNGs
-    tint: int = 0xFFFFFF # Comma separated RGB tint list applied to images
-    size: int = 200 # Size of image in pixels
-    # Structure Attributes
-    structure_type: StructureType = StructureType.Null
-    # Unit Attributes
-    unit_type: UnitType = UnitType.Null
-    carried_resource: ResourceType = ResourceType.Null
-    carry_amount: int = 0
-    carry_capacity: int = 25
-    tasks: list[Task] = Field(default_factory=list)
+class Behaviour(BaseModel):
+    """
+    Abstract base class for all behaviours.
+    """
+    time_until_activation: float = 0.0 # Time in seconds before the first activation
+    cooldown: float = 0.0 # Time in seconds between subsequent activations
+
+    async def on_tick(self, entity: Entity, game: Game, delta: float):
+        """
+        Called every tick.
+        """
+        self.time_until_activation -= delta
+        if self.time_until_activation <= 0.0:
+            self.time_until_activation += random.uniform(0.95, 1.05) * self.cooldown
+            await self.on_activate(entity, game)
+
+    async def on_create(self, entity: Entity, game: Game):
+        """
+        Called when an entity is created.
+        """
+        pass
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        """
+        Called each time the cooldown expires. Returns whether the activation
+        has been handled or should continue being processed.
+        """
+        pass
+
+    async def on_remove(self, entity: Entity, game: Game):
+        """
+        Called when an entity is removed for any reason.
+        """
+        pass
+
+
+class AttackBehaviour(Behaviour):
+    range: int = 1
+    min_damage: float = 0.0
+    max_damage: float = 0.0
+    visual: str = ""
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        enemy = entity.find_enemy_nearby(game, self.range)
+        if enemy is None:
+            return False
+
+        await game.handle_attack(
+            entity,
+            enemy,
+            random.uniform(self.min_damage, self.max_damage),
+            self.visual
+        )
+        return True
+
+
+class SummonBehaviour(Behaviour):
+    unit: str
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+        return True
+
+
+class PathingBehaviour(Behaviour):
     path: list[Position] = Field(default_factory=list)
-    gathering_rate: float = 1.0
-    action_cooldown: float = 1.0
-    time_until_action: float = 1.0
-    # Resource Attributes
-    resource_type: ResourceType = ResourceType.Null
 
-    async def on_tick(self, game: Game, delta: float):
-        if self.time_until_update <= 0.0:
-            game.queue_update(self)
-        else:
-            self.time_until_update -= delta
-
-        if self.entity_type == EntityType.Unit:
-            await self.on_unit_tick(game, delta)
-        if self.entity_type == EntityType.Structure:
-            await self.on_structure_tick(game, delta)
-
-    async def on_structure_tick(self, game: Game, delta: float):
-        if self.time_until_action > 0:
-            self.time_until_action -= delta
-            return
-        self.time_until_action = random.uniform(self.action_cooldown - 0.05, self.action_cooldown + 0.05)
-
-        if self.structure_type == StructureType.ArrowTower:
-            enemy = self.find_enemy_nearby(game, 6)
-            if enemy is None:
-                return
-            await game.handle_attack(self, enemy, random.uniform(4.5, 5.5))
-        elif self.structure_type == StructureType.Portal:
-            await game.add_entity(Entity(
-                entity_type=EntityType.Unit,
-                unit_type=UnitType.Voidling,
-                alignment=self.alignment,
-                name="Voidling",
-                hp=5,
-                max_hp=5,
-                position=game.empty_space_near(self.position),
-                image="/voidling.png",
-            ))
-
-    async def on_unit_tick(self, game: Game, delta: float):
-        if self.time_until_action > 0:
-            self.time_until_action -= delta
-            return
-        self.time_until_action = random.uniform(self.action_cooldown - 0.05, self.action_cooldown + 0.05)
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
 
         if self.path:
             next_position = self.path.pop()
             if next_position in game.map:
                 self.path = []
             else:
-                await game.move_entity(self, next_position)
-                return
+                await game.move_entity(entity, next_position)
+                return True
 
-        if self.alignment == Alignment.Player:
-            await self.on_worker_tick(game)
-        elif self.alignment == Alignment.Enemy:
-            await self.on_enemy_tick(game)
+        return False
 
-    async def on_enemy_tick(self, game: Game):
-        if self.unit_type == UnitType.Voidling:
-            vision_range = 6
-            attack_range = 1
-            damage = (2.5, 3)
+    async def move_toward(self, entity: Entity, game: Game, target_position: Position, limit: int = 20) -> bool:
+        # Find a path to the target location
+        path = game.path_between(entity.position, target_position, limit)
+        if not path:
+            return False
+
+        # Truncate the path to 1/5 of its length (rounded up)
+        path = path[0:len(path)//5 + 1]
+
+        # If the remaining path contains only 1 space, just move
+        if len(path) == 1:
+            await game.move_entity(entity, path[0])
+        # If the remaining path is longer, store the future spaces and move
         else:
-            return
+            path.reverse()
+            self.path = path
+            await game.move_entity(entity, self.path.pop())
 
-        # Check for an enemy in attack range
+        return True
 
-        # Check for an enemy nearby
-        enemy = self.find_enemy_nearby(game, vision_range)
-        if enemy is None:
-            await self.move_toward(Position(0, 0), game)
-            return
 
-        # If close enough to the enemy, attack them
-        if self.position.distance(enemy.position) <= attack_range:
-            await game.handle_attack(self, enemy, random.uniform(*damage))
-        # If not, move closer
-        else:
-            await self.move_toward(enemy.position, game)
+class GatherResourcesBehaviour(PathingBehaviour):
+    target_resource: Optional[Entity] = None
+    carried_resource: ResourceType = ResourceType.Null
+    carry_capacity: int = 25
+    carry_amount: int = 0
 
-    async def on_worker_tick(self, game: Game):
-        if self.position.magnitude <= 2 and self.carried_resource != ResourceType.Null:
+    async def on_create(self, entity: Entity, game: Game):
+        await super().on_create(entity, game)
+
+        if self.target_resource is None:
+            for position in entity.position.flood_fill():
+                target_entity = game.map.get(position)
+                if target_entity is None:
+                    continue
+                if not (target_entity.entity_tag & EntityTag.Resource):
+                    continue
+                self.target_resource = target_entity
+                break
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        # If we're near the town hall and carrying resources, drop them off
+        if entity.position.magnitude <= 2 and self.carried_resource != ResourceType.Null:
             task = game.add_resource(self.carried_resource, self.carry_amount)
             self.carry_amount = 0
             self.carried_resource = ResourceType.Null
             await task
 
+        # If our inventory is full, path toward the town hall
         if self.carry_amount == self.carry_capacity:
-            await self.move_toward(Position(0, 0), game)
+            await self.move_toward(entity, game, Position(0, 0))
+            return True
 
-        elif self.unit_type == UnitType.Builder:
-            # Find nearest damaged structure
-            target = None
-            lowest_distance = None
-            for structure in game.structures.values():
-                if structure.hp == structure.max_hp:
-                    continue
-                distance = self.position.distance(structure.position)
-                if lowest_distance is None or distance < lowest_distance:
-                    lowest_distance = distance
-                    target = structure
-            # Repair if adjacent, or path to if not adjacent
-            if target is not None:
-                if lowest_distance == 1:
-                    structure.hp = min(structure.hp + 5, structure.max_hp)
-                else:
-                    await self.move_toward(structure.position, game)
-
-        elif self.unit_type == UnitType.Lumberjack:
-            await self.gather(ResourceType.Wood, game)
-
-        elif self.unit_type == UnitType.Miner:
-            await self.gather(ResourceType.Stone, game)
-
-        elif self.unit_type == UnitType.Farmer:
-            await self.gather(ResourceType.Food, game)
-
-    async def gather(self, resource_type: ResourceType, game: Game):
-        for position in self.position.flood_fill():
-            entity = game.map.get(position)
-            if entity is None:
-                continue
-            if entity.entity_type != "resource":
-                continue
-            if entity.resource_type != resource_type:
-                continue
-            target_position = position
-            break
-        if self.position.distance(target_position) == 1:
-            if self.carried_resource != resource_type:
+        # If we're adjacent to the target resource, gather from it
+        if entity.position.distance(self.target_resource.position) == 1:
+            if self.carried_resource != self.target_resource.resource_type:
                 self.carry_amount = 0
-                self.carried_resource = resource_type
+                self.carried_resource = self.target_resource.resource_type
             self.carry_amount += 5
+        # Otherwise path toward our target resource
         else:
-            await self.move_toward(target_position, game)
+            await self.move_toward(entity, game, self.target_resource.position)
+
+        # We always have something to do
+        return True
+
+
+class RepairBehaviour(PathingBehaviour):
+    async def on_activate(self, entity, game):
+        if await super().on_activate(entity, game):
+            return True
+
+        # Find nearest damaged structure
+        target = None
+        lowest_distance = None
+        for structure in game.structures.values():
+            if structure.alignment != entity.alignment:
+                continue
+            if structure.hp == structure.max_hp:
+                continue
+            distance = entity.position.distance(structure.position)
+            if lowest_distance is None or distance < lowest_distance:
+                lowest_distance = distance
+                target = structure
+
+        # Nothing to repair
+        if target is None:
+            return False
+
+        # Repair if adjacent, or path to if not adjacent
+        if lowest_distance == 1:
+            structure.hp = min(structure.hp + 5, structure.max_hp)
+        else:
+            await self.move_toward(entity, game, structure.position)
+        return True
+
+
+class SeekEnemyBehaviour(PathingBehaviour):
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        enemy = entity.find_enemy_nearby(game, entity.vision_size)
+        if enemy is None:
+            return False
+
+        return await self.move_toward(entity, game, enemy.position)
+
+
+class SeekTownHallBehaviour(SeekEnemyBehaviour):
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        return await self.move_toward(entity, game, Position(0, 0))
+
+
+class Entity(BaseModel):
+    id: str = Field(default_factory=generate_id)
+    template: bool = True
+    entity_tag: int = 0
+    resource_type: ResourceType = ResourceType.Null # Only used if entity_tag contains Resource
+    position: Position = Field(default_factory=Position)
+    name: str = "<Unknown>"
+    hp: float = 0
+    max_hp: float = 0
+    alignment: Alignment = Alignment.Neutral
+    vision_size: int = 10
+    image: Optional[str] = None # Comma separated list of PNGs
+    tint: int = 0xFFFFFF # RBG tint
+    size: int = 200 # Size of image in pixels
+    behaviours: list[Behaviour] = Field(default_factory=list)
+
+    time_until_update: float = Field(0.0, exclude=True)
+
+    async def on_tick(self, game: Game, delta: float):
+        self.time_until_update -= delta
+        if self.time_until_update <= 0.0:
+            game.queue_update(self)
+
+        for behaviour in self.behaviours:
+            await behaviour.on_tick(self, game, delta)
 
     def find_enemy_nearby(self, game: Game, limit: int = 20) -> Optional[Entity]:
         for position in self.position.flood_fill(limit):
@@ -399,17 +431,6 @@ class Entity(BaseModel):
             if entity.alignment != self.alignment:
                 return entity
         return None
-
-    async def move_toward(self, target_position: Position, game: Game, limit: int = 20) -> bool:
-        path = game.path_between(self.position, target_position, limit)
-        if not path:
-            return False
-        path = path[0:len(path)//5 + 1]
-        if len(path) == 1:
-            await game.move_entity(self, path[0])
-        else:
-            await game.assign_path(self, path)
-        return True
 
 
 def create_hexagon(position: Position, size: int) -> Polygon:
@@ -438,8 +459,8 @@ class Game(BaseModel):
     id: str
     owner: str
     inactive: bool = False
-    entities: dict[str, Entity] = Field(default_factory=dict)
     state: GameState = GameState.Lobby
+    entities: dict[str, Entity] = Field(default_factory=dict)
 
     resources: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     structures: dict[str, Entity] = Field(default_factory=dict, exclude=True)
@@ -508,10 +529,8 @@ class Game(BaseModel):
             self.time_since_active = 0.0
             return
 
-        for unit in tuple(self.units.values()):
-            await unit.on_tick(self, delta)
-        for structure in tuple(self.structures.values()):
-            await structure.on_tick(self, delta)
+        for entity in tuple(self.entities.values()):
+            await entity.on_tick(self, delta)
 
         serialized_entities = []
         for entity_id in self.queued_updates:
@@ -536,14 +555,14 @@ class Game(BaseModel):
         setattr(self, str(resource_type), getattr(self, str(resource_type)) + amount)
         await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": amount})
 
-    async def handle_attack(self, attacker: Entity, target: Entity, amount: float):
+    async def handle_attack(self, attacker: Entity, target: Entity, amount: float, visual: str):
         target.hp -= amount
         if target.hp < 0:
             target.hp = 0
 
         await self.broadcast({
             "type": "entity/attack",
-            "visual": "laser",
+            "visual": visual,
             "source": attacker.id,
             "target": target.id,
         })
@@ -554,47 +573,14 @@ class Game(BaseModel):
             self.queue_update(target)
 
     async def place_town_hall(self):
-        town_hall = await self.add_entity(Entity(
-            entity_type=EntityType.Structure,
-            structure_type=StructureType.TownHall,
-            alignment=Alignment.Player,
-            hp=100,
-            max_hp=100,
-            position=Position(0,0),
-            image="/castle.png",
-            size=500,
-        ))
+        town_hall = await self.add_entity("Town Hall", Position(0, 0), Alignment.Player)
         for position in Position(0,0).neighbors:
             self.map[position] = town_hall
 
         spawn_points = self.generate_spawn_points()
-
-        await self.add_entity(Entity(
-            entity_type=EntityType.Structure,
-            structure_type=StructureType.Portal,
-            alignment=Alignment.Enemy,
-            hp=100,
-            max_hp=100,
-            action_cooldown=5.0,
-            time_until_action=5.0,
-            position=random.choice(spawn_points),
-            image="/portal.png",
-        ))
-
-        # DBG
-        await self.add_arrow_tower(Position(0, -3))
-        await self.add_arrow_tower(Position(0, 3))
-
-    async def add_arrow_tower(self, position: Position):
-        return await self.add_entity(Entity(
-            entity_type=EntityType.Structure,
-            structure_type=StructureType.ArrowTower,
-            alignment=Alignment.Player,
-            hp=10,
-            max_hp=10,
-            position=position,
-            image="/tower.png,/arrow-tower.png",
-        ))
+        await self.add_entity("Portal", random.choice(spawn_points), Alignment.Enemy)
+        await self.add_entity("Arrow Tower", Position(0, -3), Alignment.Player)
+        await self.add_entity("Arrow Tower", Position(0, 3), Alignment.Player)
 
     async def generate_resources(self):
         for q in range(-500, 501):
@@ -605,38 +591,43 @@ class Game(BaseModel):
                 if position in self.map:
                     continue
                 if random.randint(0, 60 + position.magnitude**2 // 100) == 0:
-                    await self.add_entity(Entity(
-                        entity_type=EntityType.Resource,
-                        position=position,
-                        resource_type=random.choice([
-                            ResourceType.Stone,
-                            ResourceType.Food,
-                            ResourceType.Wood,
-                        ])
-                    ))
+                    await self.add_entity(random.choice(["Stone", "Food", "Wood"]), position)
+
         valid_positions = [p for p in Position(0,0).flood_fill(limit=6) if p not in self.map]
-        for resource_type in [ResourceType.Stone, ResourceType.Food, ResourceType.Wood]:
+        for resource_type in ["Stone", "Food", "Wood"]:
             position = random.choice(valid_positions)
             valid_positions.remove(position)
-            await self.add_entity(Entity(
-                entity_type=EntityType.Resource,
-                position=position,
-                resource_type=resource_type
-            ))
+            await self.add_entity(resource_type, position)
 
+    async def add_entity(self, name: str, position: Position, alignment: Alignment = Alignment.Neutral) -> Entity:
+        if position in self.map:
+            raise RuntimeError("attempted to add entity to occupied position")
 
-    async def add_entity(self, entity: Entity) -> Entity:
+        template = entity_templates[name]
+
+        entity = template.model_copy()
+        entity.id = generate_id()
+        entity.name = name
+        entity.hp = entity.max_hp
+        entity.position = position
+        entity.alignment = alignment
+        entity.template = False
+        entity.behaviours = [behaviour.model_copy() for behaviour in entity.behaviours]
+
         self.entities[entity.id] = entity
         self.map[entity.position] = entity
-        if entity.entity_type == EntityType.Structure:
+        if entity.entity_tag & EntityTag.Structure:
             self.structures[entity.id] = entity
-        elif entity.entity_type == EntityType.Unit:
+        elif entity.entity_tag & EntityTag.Unit:
             self.units[entity.id] = entity
-        elif entity.entity_type == EntityType.Resource:
+        elif entity.entity_tag & EntityTag.Resource:
             self.resources[entity.id] = entity
         if entity.alignment == Alignment.Player:
             await self.add_vision(entity)
+
         await self.broadcast({"type": "entity/add", "entity": entity.model_dump(mode="json")})
+        for behaviour in entity.behaviours:
+            await behaviour.on_create(entity, self)
         return entity
 
     async def move_entity(self, entity: Entity, position: Position):
@@ -655,12 +646,14 @@ class Game(BaseModel):
     async def remove_entity(self, entity: Entity):
         self.entities.pop(entity.id, None)
         self.map.pop(entity.position, None)
-        if entity.entity_type == EntityType.Structure:
+        if entity.entity_tag & EntityTag.Structure:
             self.structures.pop(entity.id, None)
-        elif entity.entity_type == EntityType.Unit:
+        elif entity.entity_tag & EntityTag.Unit:
             self.units.pop(entity.id, None)
-        elif entity.entity_type == EntityType.Resource:
+        elif entity.entity_tag & EntityTag.Resource:
             self.resources.pop(entity.id, None)
+        for behaviour in entity.behaviours:
+            await behaviour.on_remove(entity, self)
         await self.broadcast({"type": "entity/remove", "id": entity.id})
 
     async def add_vision(self, entity: Entity):
@@ -669,11 +662,6 @@ class Game(BaseModel):
             return
         self.revealed_area = new_area
         await self.broadcast({"type": "reveal", "area": shape_to_coordinates(self.revealed_area)})
-
-    async def assign_path(self, entity: Entity, path: list[Position]):
-        path.reverse()
-        entity.path = path
-        await self.move_entity(entity, entity.path.pop())
 
     def empty_space_near(self, starting_position: Position) -> Position:
         for position in starting_position.flood_fill():
@@ -808,18 +796,10 @@ class BuildRequest(GameRequest):
     position: Position
 
 
-@register("game/build/farmer")
-async def handle_buy_farmer(connection: Connection, request: GameRequest):
+@register("game/train/worker")
+async def handle_train_worker(connection: Connection, request: GameRequest):
     await request.game.spend([ResourceType.Gold, 100])
-
-    await request.game.add_entity(Entity(
-        entity_type=EntityType.Unit,
-        alignment=Alignment.Player,
-        position=request.game.empty_space_near(Position(0,0)),
-        unit_type=UnitType.Farmer,
-        image="/farmer.png",
-        name="Farmer",
-    ))
+    await request.game.add_entity("Worker", request.game.empty_space_near(Position(0, 0)), Alignment.Player)
 
 
 @register("game/build/arrow_tower")
@@ -828,7 +808,67 @@ async def handle_build_tower(connection: Connection, request: BuildRequest):
         raise ClientError("position is occupied")
 
     await request.game.spend([ResourceType.Wood, 100], [ResourceType.Stone, 100])
-    await request.game.add_arrow_tower(request.position)
+    await request.game.add_entity("Arrow Tower", request.position, Alignment.Player)
+
+
+entity_templates: dict[str, Entity] = {
+    "Stone": Entity(
+        entity_tag=EntityTag.Resource,
+        resource_type=ResourceType.Stone,
+        image="/rock.png",
+        tint=0x808080,
+    ),
+    "Food": Entity(
+        entity_tag=EntityTag.Resource,
+        resource_type=ResourceType.Food,
+        image="/wheat.png",
+        tint=0xffff00,
+    ),
+    "Wood": Entity(
+        entity_tag=EntityTag.Resource,
+        resource_type=ResourceType.Wood,
+        image="/forest.png",
+        tint=0x40a010,
+    ),
+    "Town Hall": Entity(
+        entity_tag=EntityTag.Structure,
+        max_hp=100,
+        image="/castle.png",
+        size=500,
+    ),
+    "Arrow Tower": Entity(
+        entity_tag=EntityTag.Structure,
+        max_hp=15,
+        image="/tower.png,/arrow-tower.png",
+        behaviours=[
+            AttackBehaviour(cooldown=1.0, range=6, min_damage=5.0, max_damage=6.0, visual="arrow"),
+        ],
+    ),
+    "Voidling": Entity(
+        entity_tag=EntityTag.Unit,
+        max_hp=5,
+        image="/voidling.png",
+        behaviours=[
+            SeekTownHallBehaviour(cooldown=1.0),
+            AttackBehaviour(cooldown=1.0, range=1, min_damage=0.75, max_damage=1.25, visual="claws"),
+        ],
+    ),
+    "Portal": Entity(
+        entity_tag=EntityTag.Structure,
+        max_hp=100,
+        image="/portal.png",
+        behaviours=[
+            SummonBehaviour(cooldown=5.0, unit="Voidling"),
+        ]
+    ),
+    "Worker": Entity(
+        entity_tag=EntityTag.Unit,
+        image="/farmer.png",
+        behaviours=[
+            GatherResourcesBehaviour(cooldown=1.0, carry_capacity=25),
+        ]
+    ),
+}
 
 
 async def game_thread():

@@ -9,7 +9,7 @@ from . import database
 from .errors import AuthError, ClientError
 from .database_models import Permission, Channel, Chatter
 from .request_models import channel_by_twitch_id
-from .game import games, resource_types, Alignment, Entity, EntityType, Position, UnitType
+from .game import games, resource_types, Alignment, Entity, EntityTag, Position, UnitType
 
 
 TWITCH_KEY = os.environ["TWITCH_KEY"]
@@ -101,7 +101,7 @@ async def handle_twitch_event(key: str = Header(), event: str = Header()):
         worker = game.entities.get(user_id)
         if worker is None:
             worker = Entity(
-                entity_type=EntityType.Unit,
+                entity_tag=EntityTag.Unit,
                 alignment=Alignment.Player,
                 id=user_id,
                 name=user_name,

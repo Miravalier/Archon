@@ -137,6 +137,13 @@ async function Main() {
         dispatch("scale", state.camera.scale.x);
     });
 
+    // Add app on_tick callback
+    state.app.ticker.add(ticker => {
+        for (const callback of Object.values(state.onTick)) {
+            callback(ticker.elapsedMS);
+        }
+    });
+
     // Initialize client
     await client.init();
     globalThis.client = client;
