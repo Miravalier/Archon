@@ -841,7 +841,7 @@ entity_templates: dict[str, Entity] = {
         max_hp=15,
         image="/tower.png,/arrow-tower.png",
         behaviours=[
-            AttackBehaviour(cooldown=1.0, range=6, min_damage=5.0, max_damage=6.0, visual="arrow"),
+            AttackBehaviour(cooldown=1.0, range=6, min_damage=4.0, max_damage=6.0, visual="arrow"),
         ],
     ),
     "Voidling": Entity(
@@ -864,6 +864,7 @@ entity_templates: dict[str, Entity] = {
     "Worker": Entity(
         entity_tag=EntityTag.Unit,
         image="/farmer.png",
+        max_hp=10,
         behaviours=[
             GatherResourcesBehaviour(cooldown=1.0, carry_capacity=25),
         ]

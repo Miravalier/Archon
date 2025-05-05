@@ -1,3 +1,4 @@
+import { Container } from "pixi.js";
 import { state } from "./state.ts";
 
 
@@ -131,6 +132,9 @@ export class Entity {
     tint: number;
     size: number;
 
+    // Local Data
+    sprite: Container;
+
     constructor(data) {
         this.id = data.id;
         this.template = data.template;
@@ -144,6 +148,7 @@ export class Entity {
         this.image = data.image;
         this.tint = data.tint;
         this.size = data.size;
+        this.sprite = null;
     }
 
     update(data) {
@@ -197,20 +202,8 @@ export class Game {
         this.enemyCount = 0;
         for (const [entityId, rawEntity] of Object.entries(data.entities)) {
             const entity = new Entity(rawEntity);
-            this.map[entity.position.toKey()] = entity;
             this.entities[entityId] = entity;
-            if (entity.entityTag & EntityTag.Unit) {
-                this.units[entityId] = entity;
-                if (entity.alignment == Alignment.Enemy) {
-                    this.enemyCount += 1;
-                }
-            }
-            else if (entity.entityTag & EntityTag.Resource) {
-                this.resources[entityId] = entity;
-            }
-            else if (entity.entityTag & EntityTag.Structure) {
-                this.structures[entityId] = entity;
-            }
+            this.map[entity.position.toKey()] = entity;
         }
         const origin = new Position({ q: 0, r: 0 });
         for (const neighbor of origin.neighbors) {
@@ -229,6 +222,7 @@ export class Game {
         for (const point of this.revealedArea[0]) {
             positions.push({x: point[0], y: point[1]});
         }
+        state.mask.clear();
         state.mask.poly(positions);
         state.mask.fill({color: "#ffffff"});
     }

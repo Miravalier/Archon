@@ -16,29 +16,30 @@ const resourceIcons = {
 };
 
 
-const sprites: { [id: string]: [Container, SpriteData] } = {};
-
-
 function lerp(a: number, b: number, t: number): number {
     return a + (b - a) * t;
 }
 
 
-function moveSprite(sprite: Container, position: Position, durationMs: number) {
-    const startX = sprite.x;
-    const startY = sprite.y;
-    const endX = position.x;
-    const endY = position.y;
+function onMoveEntity(entity: Entity, durationMs: number) {
+    if (!entity.sprite) {
+        return;
+    }
+
+    const startX = entity.sprite.x;
+    const startY = entity.sprite.y;
+    const endX = entity.position.x;
+    const endY = entity.position.y;
     let t = 0;
-    const onTickId = addOnTick((elapsedMs) => {
+    addOnTick(entity.id, (elapsedMs) => {
         t += elapsedMs / durationMs;
         if (t >= 1) {
-            sprite.x = endX;
-            sprite.y = endY;
-            removeOnTick(onTickId);
+            entity.sprite.x = endX;
+            entity.sprite.y = endY;
+            removeOnTick(entity.id);
         } else {
-            sprite.x = lerp(startX, endX, t);
-            sprite.y = lerp(startY, endY, t);
+            entity.sprite.x = lerp(startX, endX, t);
+            entity.sprite.y = lerp(startY, endY, t);
         }
     })
 }
@@ -60,7 +61,50 @@ interface SpriteData {
 }
 
 
-async function makeSprite(data: SpriteData): Promise<[Container, SpriteData]> {
+const pixiObjectGraveyard: {[templateId: string]: any[]} = {};
+
+
+function makeGraphics(): Graphics {
+    const graveyardArray = pixiObjectGraveyard["<graphics>"];
+    if (graveyardArray && graveyardArray.length != 0) {
+        const graphics = graveyardArray.pop() as Graphics;
+        graphics.clear();
+        return graphics;
+    }
+
+    return new Graphics();
+}
+
+
+function destroyGraphics(graphics: Graphics) {
+    graphics.removeFromParent();
+    let graveyardArray = pixiObjectGraveyard["<graphics>"];
+    if (!graveyardArray) {
+        graveyardArray = [];
+        pixiObjectGraveyard["<graphics>"] = graveyardArray;
+    }
+    graveyardArray.push(graphics);
+}
+
+
+function destroySprite(templateId: string, sprite: Container) {
+    sprite.removeFromParent();
+    let graveyardArray = pixiObjectGraveyard[templateId];
+    if (!graveyardArray) {
+        graveyardArray = [];
+        pixiObjectGraveyard[templateId] = graveyardArray;
+    }
+    graveyardArray.push(sprite);
+}
+
+
+async function makeSprite(templateId: string, data: SpriteData): Promise<Container> {
+    const graveyardArray = pixiObjectGraveyard[templateId];
+    if (graveyardArray && graveyardArray.length != 0) {
+        return graveyardArray.pop();
+    }
+
+    console.log("Creating new Sprite for", templateId);
     const spriteContainer = new Container();
 
     if (data.mask) {
@@ -135,37 +179,32 @@ async function makeSprite(data: SpriteData): Promise<[Container, SpriteData]> {
     hpFill.label = "hpFill";
     spriteContainer.addChild(hpFill);
 
-    return [spriteContainer, data];
+    return spriteContainer;
 }
 
 
-function setHealthPercent(id: string, hpPercent: number) {
-    if (!sprites[id]) {
+function setHealthPercent(entity: Entity) {
+    if (!entity.sprite) {
         return;
     }
 
-    const [sprite, data] = sprites[id];
-
-    const hpBackground = sprite.getChildByLabel("hpBackground") as Graphics;
-    hpBackground.visible = true;
+    const sprite = entity.sprite;
+    const hpPercent = entity.hp / entity.maxHp;
 
     const hpBar = sprite.getChildByLabel("hpFill") as Graphics;
     hpBar.clear();
-    hpBar.roundRect(-data.size / 2 + 2, -data.size / 2 - 6, (data.size - 4) * hpPercent, 12, 2);
+    hpBar.roundRect(-entity.size / 2 + 2, -entity.size / 2 - 6, (entity.size - 4) * hpPercent, 12, 2);
     hpBar.fill({ color: "#aa2020" });
 }
 
 
-function addToBoard(item: Container, position: Position) {
-    item.x = position.x;
-    item.y = position.y;
-    state.camera.addChild(item);
+async function onEntityRemove(game: Game, entity: Entity) {
+
 }
 
 
 async function onEntityCreate(game: Game, entity: Entity) {
     let sprite: Container;
-    let data: SpriteData;
 
     let icon: string[] = ["/unknown.png"];
     let tint: number = 0xffffff;
@@ -177,7 +216,7 @@ async function onEntityCreate(game: Game, entity: Entity) {
     }
 
     if (entity.entityTag & (EntityTag.Unit|EntityTag.Structure)) {
-        [sprite, data] = await makeSprite({ url: icon, tint, size, label: entity.name });
+        sprite = await makeSprite(entity.name, { url: icon, tint, size, label: entity.name });
         sprite.eventMode = "dynamic";
         const spriteLabel = sprite.getChildByLabel("label");
         sprite.addEventListener("mouseenter", () => {
@@ -188,8 +227,9 @@ async function onEntityCreate(game: Game, entity: Entity) {
             }, { once: true });
         });
     } else {
-        [sprite, data] = await makeSprite({ url: icon, tint, size });
+        sprite = await makeSprite(entity.name, { url: icon, tint, size });
     }
+    entity.sprite = sprite;
 
     game.map[entity.position.toKey()] = entity;
     game.entities[entity.id] = entity;
@@ -206,11 +246,15 @@ async function onEntityCreate(game: Game, entity: Entity) {
         game.structures[entity.id] = entity;
     }
 
-    sprites[entity.id] = [sprite, data];
     if (entity.maxHp != 0) {
-        setHealthPercent(entity.id, entity.hp / entity.maxHp);
+        const hpBackground = sprite.getChildByLabel("hpBackground") as Graphics;
+        hpBackground.visible = true;
+        setHealthPercent(entity);
     }
-    addToBoard(sprite, entity.position);
+
+    sprite.x = entity.position.x;
+    sprite.y = entity.position.y;
+    state.camera.addChild(sprite);
 }
 
 
@@ -259,7 +303,7 @@ export async function activate(game_id: string) {
         }
         const controller = new AbortController();
         placingStructure = true;
-        const [sprite, _] = await makeSprite({ url: "/arrow-tower.png" });
+        const sprite = await makeSprite("arrow-tower-ghost", { url: "/arrow-tower.png" });
         sprite.alpha = 0.5;
         state.camera.addChild(sprite);
         sprite.x = startEv.clientX;
@@ -283,8 +327,7 @@ export async function activate(game_id: string) {
             if (game.map[hexPosition.toKey()]) {
                 return;
             }
-
-            sprite.removeFromParent();
+            destroySprite("arrow-tower-ghost", sprite);
             controller.abort();
             placingStructure = false;
             client.send({ "type": "game/build/arrow_tower", "game": game_id, "position": { q: hexPosition.q, r: hexPosition.r } });
@@ -338,16 +381,11 @@ export async function activate(game_id: string) {
             if (!entity.position.equals(oldPosition)) {
                 delete game.map[oldPosition.toKey()];
                 game.map[entity.position.toKey()] = entity;
-
-                // Move sprite
-                if (sprites[entity.id]) {
-                    const [sprite, _] = sprites[entity.id];
-                    moveSprite(sprite, entity.position, 300);
-                }
+                onMoveEntity(entity, 300);
             }
 
             if (entity.maxHp != 0) {
-                setHealthPercent(entity.id, entity.hp / entity.maxHp);
+                setHealthPercent(entity);
             }
         }
     });
@@ -358,33 +396,32 @@ export async function activate(game_id: string) {
         if (source && target) {
             let target_x: number;
             let target_y: number;
-            if (!sprites[target.id]) {
+            if (!target.sprite) {
                 target_x = target.position.x;
                 target_y = target.position.y;
             }
             else {
-                const [sprite, _] = sprites[data.target];
-                target_x = sprite.x;
-                target_y = sprite.y;
+                target_x = target.sprite.x;
+                target_y = target.sprite.y;
             }
-            const attack = new Graphics();
+            const attack = makeGraphics();
             attack.moveTo(source.position.x, source.position.y);
             attack.lineTo(target_x, target_y);
             attack.stroke({ color: "#0060ff", width: 4 });
             state.camera.addChild(attack);
             setTimeout(() => {
-                attack.removeFromParent();
+                destroyGraphics(attack);
             }, 100);
         }
     });
 
     client.subscribe("entity/remove", async data => {
         const entity = game.entities[data.id];
-
         delete game.entities[data.id];
         delete game.units[data.id];
         delete game.resources[data.id];
         delete game.structures[data.id];
+        removeOnTick(data.id);
 
         if (!entity) {
             return;
@@ -395,11 +432,9 @@ export async function activate(game_id: string) {
             game.enemyCount -= 1;
         }
 
-        if (sprites[data.id]) {
-            const [sprite, _] = sprites[data.id];
-            delete sprites[data.id];
+        if (entity.sprite) {
             setTimeout(() => {
-                sprite.removeFromParent();
+                destroySprite(entity.name, entity.sprite);
             }, 100);
         }
     });

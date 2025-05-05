@@ -1,5 +1,4 @@
 import { Application, Container, Graphics } from "pixi.js";
-import { generateToken } from "./utils.ts";
 
 
 type OnTickCallback = (delta: number) => void;
@@ -25,10 +24,8 @@ export const state: State = {
 };
 
 
-export function addOnTick(callback: OnTickCallback): string {
-    const id = generateToken();
+export function addOnTick(id: string, callback: OnTickCallback) {
     state.onTick[id] = callback;
-    return id;
 }
 
 
