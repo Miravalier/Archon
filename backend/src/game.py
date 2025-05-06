@@ -223,18 +223,38 @@ class Behaviour(BaseModel):
         """
         pass
 
+    async def on_action(self, entity: Entity, target: Entity, game: Game):
+        """
+        Called when a user sends an action command with a given target
+        """
+        pass
+
 
 class AttackBehaviour(Behaviour):
     range: int = 1
     min_damage: float = 0.0
     max_damage: float = 0.0
     visual: str = ""
+    manual_target: Optional[str] = None
+
+    async def on_action(self, entity, target, game):
+        await super().on_action(entity, target, game)
+
+        if target.entity_tag & EntityTag.Resource:
+            return
+
+        self.manual_target = target.id
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
 
-        enemy = entity.find_enemy_nearby(game, self.range)
+        manual_target = game.entities.get(self.manual_target)
+        if manual_target is not None and manual_target.position.distance(entity.position) <= self.range:
+            enemy = manual_target
+        else:
+            enemy = entity.find_enemy_nearby(game, self.range)
+
         if enemy is None:
             return False
 
@@ -301,6 +321,14 @@ class GatherResourcesBehaviour(PathingBehaviour):
     carried_resource: ResourceType = ResourceType.Null
     carry_capacity: int = 25
     carry_amount: int = 0
+
+    async def on_action(self, entity: Entity, target: Entity, game: Game):
+        await super().on_action(entity, target, game)
+
+        if not (target.entity_tag & EntityTag.Resource):
+            return
+
+        self.target_resource = target
 
     async def on_create(self, entity: Entity, game: Game):
         await super().on_create(entity, game)
@@ -431,6 +459,10 @@ class Entity(BaseModel):
             if entity.alignment != self.alignment:
                 return entity
         return None
+
+    async def on_action(self, game: Game, target: Entity):
+        for behaviour in self.behaviours:
+            await behaviour.on_action(self, target, game)
 
 
 def create_hexagon(position: Position, size: int) -> Polygon:
@@ -809,6 +841,24 @@ async def handle_build_tower(connection: Connection, request: BuildRequest):
 
     await request.game.spend([ResourceType.Wood, 100], [ResourceType.Stone, 100])
     await request.game.add_entity("Arrow Tower", request.position, Alignment.Player)
+
+
+class ActionRequest(GameRequest):
+    selected: list[str]
+    target: str
+
+
+@register("game/action")
+async def handle_take_action(connection: Connection, request: ActionRequest):
+    target_entity = request.game.entities.get(request.target)
+    if target_entity is None:
+        return
+
+    for selected_id in request.selected:
+        selected_entity = request.game.entities.get(selected_id)
+        if selected_entity is None or selected_entity.alignment != Alignment.Player:
+            continue
+        await selected_entity.on_action(request.game, target_entity)
 
 
 entity_templates: dict[str, Entity] = {

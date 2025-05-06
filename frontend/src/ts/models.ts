@@ -111,9 +111,9 @@ export class Position {
 
 
 export enum Alignment {
-    Neutral = 0,
-    Player = 1,
-    Enemy = 2,
+    Enemy = 0,
+    Neutral = 1,
+    Player = 2,
 }
 
 
@@ -183,6 +183,8 @@ export class Game {
     enemyCount: number;
     revealedArea: any[];
 
+    selected: Set<string>;
+
     food: number;
     gold: number;
     stone: number;
@@ -215,6 +217,7 @@ export class Game {
         this.wood = data.wood;
         this.aether = data.aether;
         this.revealedArea = data.revealed_area;
+        this.selected = new Set();
     }
 
     reveal() {

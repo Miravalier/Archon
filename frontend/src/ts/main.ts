@@ -43,6 +43,12 @@ async function Main() {
         resolution: 1,
     });
     document.body.appendChild(state.app.canvas);
+    state.app.canvas.addEventListener("contextmenu", ev => {
+        ev.preventDefault();
+        if (state.onRightClick) {
+            state.onRightClick(ev);
+        }
+    });
 
     // Initialize Overlay
     state.overlay = document.body.appendChild(document.createElement("div"));
@@ -59,6 +65,12 @@ async function Main() {
         new Color([0.1, 0.1, 0.1, 0.2]),
     );
     state.app.stage.addChild(gridContainer);
+    gridContainer.interactive = true;
+    gridContainer.addEventListener("mousedown", ev => {
+        if (state.onBackgroundClick) {
+            state.onBackgroundClick(ev);
+        }
+    });
 
     // Initialize Camera
     state.mask = state.app.stage.addChild(new Graphics());

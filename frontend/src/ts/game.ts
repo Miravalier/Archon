@@ -2,6 +2,7 @@ import { Assets, Graphics, Text, Container, Sprite } from "pixi.js";
 import { addOnTick, removeOnTick, state } from "./state.ts";
 import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
+import { GlowFilter } from "pixi-filters";
 
 
 const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
@@ -78,6 +79,7 @@ function makeGraphics(): Graphics {
 
 function destroyGraphics(graphics: Graphics) {
     graphics.removeFromParent();
+    graphics.removeAllListeners();
     let graveyardArray = pixiObjectGraveyard["<graphics>"];
     if (!graveyardArray) {
         graveyardArray = [];
@@ -89,6 +91,7 @@ function destroyGraphics(graphics: Graphics) {
 
 function destroySprite(templateId: string, sprite: Container) {
     sprite.removeFromParent();
+    sprite.removeAllListeners();
     let graveyardArray = pixiObjectGraveyard[templateId];
     if (!graveyardArray) {
         graveyardArray = [];
@@ -156,9 +159,12 @@ async function makeSprite(templateId: string, data: SpriteData): Promise<Contain
         const spriteLabel = new Text();
         spriteLabel.style.fontSize = 32;
         spriteLabel.style.fill = "#ffffff";
-        spriteLabel.style.stroke = "#000000";
+        spriteLabel.style.stroke = {
+            color: "#000000",
+            width: 4,
+        };
         spriteLabel.text = data.label;
-        spriteLabel.y = 102;
+        spriteLabel.y = data.size/2;
         spriteLabel.scale = 0.9 / state.camera.scale.x;
         spriteLabel.anchor.set(0.5, 0);
         spriteLabel.zIndex = 1;
@@ -198,8 +204,29 @@ function setHealthPercent(entity: Entity) {
 }
 
 
-async function onEntityRemove(game: Game, entity: Entity) {
+function selectEntity(game: Game, entityId: string) {
+    game.selected.add(entityId);
 
+    const entity = game.entities[entityId];
+    if (!entity || !entity.sprite) {
+        return;
+    }
+
+    entity.sprite.filters = [
+        new GlowFilter({distance: 8, outerStrength: 2, color: 0xffdd80}),
+    ];
+}
+
+
+function deselectEntity(game: Game, entityId: string) {
+    game.selected.delete(entityId);
+
+    const entity = game.entities[entityId];
+    if (!entity || !entity.sprite) {
+        return;
+    }
+
+    entity.sprite.filters = [];
 }
 
 
@@ -220,11 +247,30 @@ async function onEntityCreate(game: Game, entity: Entity) {
         sprite.eventMode = "dynamic";
         const spriteLabel = sprite.getChildByLabel("label");
         sprite.addEventListener("mouseenter", () => {
+            // Move this sprite to the front
+            state.camera.removeChild(sprite);
+            state.camera.addChild(sprite);
+            // Resize the text
             spriteLabel.scale = 0.9 / state.camera.scale.x;
             spriteLabel.visible = true;
+            // Add a listener to hide the text again
             sprite.addEventListener("mouseleave", () => {
                 spriteLabel.visible = false;
             }, { once: true });
+        });
+        sprite.addEventListener("mousedown", ev => {
+            if (!ev.shiftKey) {
+                for (const selectedId of game.selected) {
+                    deselectEntity(game, selectedId);
+                }
+                selectEntity(game, entity.id);
+            } else {
+                if (game.selected.has(entity.id)) {
+                    deselectEntity(game, entity.id);
+                } else {
+                    selectEntity(game, entity.id);
+                }
+            }
         });
     } else {
         sprite = await makeSprite(entity.name, { url: icon, tint, size });
@@ -345,6 +391,8 @@ export async function activate(game_id: string) {
     infoRegion.classList.add("info-region");
     const gameIdText = infoRegion.appendChild(document.createElement("div"));
     gameIdText.textContent = `Join ID: ${game.id}`;
+    const enemyCountText = infoRegion.appendChild(document.createElement("div"));
+    enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
 
     // Render the initial game state
     for (const entity of Object.values(game.entities)) {
@@ -364,6 +412,7 @@ export async function activate(game_id: string) {
     client.subscribe("entity/add", async data => {
         const entity = new Entity(data.entity);
         await onEntityCreate(game, entity);
+        enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });
 
     client.subscribe("entity/update", async data => {
@@ -407,7 +456,7 @@ export async function activate(game_id: string) {
             const attack = makeGraphics();
             attack.moveTo(source.position.x, source.position.y);
             attack.lineTo(target_x, target_y);
-            attack.stroke({ color: "#0060ff", width: 4 });
+            attack.stroke({ color: "#0060ff", width: 4, pixelLine: true });
             state.camera.addChild(attack);
             setTimeout(() => {
                 destroyGraphics(attack);
@@ -417,11 +466,12 @@ export async function activate(game_id: string) {
 
     client.subscribe("entity/remove", async data => {
         const entity = game.entities[data.id];
+        deselectEntity(game, data.id);
+        removeOnTick(data.id);
         delete game.entities[data.id];
         delete game.units[data.id];
         delete game.resources[data.id];
         delete game.structures[data.id];
-        removeOnTick(data.id);
 
         if (!entity) {
             return;
@@ -437,6 +487,7 @@ export async function activate(game_id: string) {
                 destroySprite(entity.name, entity.sprite);
             }, 100);
         }
+        enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });
 
     client.subscribe("reveal", async data => {
@@ -448,4 +499,28 @@ export async function activate(game_id: string) {
         game[data.resource_type] += data.amount;
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
     });
+
+    state.onBackgroundClick = (ev: MouseEvent) => {
+        if (!ev.shiftKey) {
+            for (const selectedId of game.selected) {
+                deselectEntity(game, selectedId);
+            }
+        }
+    };
+
+    state.onRightClick = (ev: MouseEvent) => {
+        const [x, y] = screenToWorldCoordinates(ev.clientX, ev.clientY);
+        const hexPosition = Position.from_pixels(x, y);
+        const entity = game.map[hexPosition.toKey()];
+        if (!entity) {
+            return;
+        }
+
+        client.send({
+            type: "game/action",
+            game: game_id,
+            selected: Array.from(game.selected),
+            target: entity.id,
+        });
+    };
 }
