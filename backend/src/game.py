@@ -402,7 +402,7 @@ class AttackBehaviour(Behaviour):
     visual: str = ""
     manual_target: Optional[str] = None
 
-    async def on_target(self, entity, target, game):
+    async def on_target(self, entity: Entity, target: Entity, game: Game):
         await super().on_target(entity, target, game)
 
         if target.entity_tag & EntityTag.Resource:
@@ -617,19 +617,35 @@ class RepairBehaviour(PathingBehaviour):
 
 
 class SeekEnemyBehaviour(PathingBehaviour):
+    ideal_distance: int = 1
+    manual_target: Optional[str] = None
+
+    async def on_target(self, entity: Entity, target: Entity, game: Game):
+        await super().on_target(entity, target, game)
+
+        self.manual_target = target.id
+
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
 
-        enemy = entity.find_enemy_nearby(game, entity.vision_size)
+        manual_target = game.entities.get(self.manual_target)
+        if manual_target is not None:
+            enemy = manual_target
+        else:
+            enemy = entity.find_enemy_nearby(game, entity.vision_size)
         if enemy is None:
             return False
+
+        if enemy.position.distance(entity.position) <= self.ideal_distance:
+            return True
 
         return await self.move_toward(entity, game, enemy.position)
 
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            ideal_distance=data.pop("Distance", 1),
             cooldown=data.pop("Cooldown"),
         )
         if data:
@@ -647,6 +663,7 @@ class SeekTownHallBehaviour(SeekEnemyBehaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            ideal_distance=data.pop("Distance", 1),
             cooldown=data.pop("Cooldown"),
         )
         if data:
@@ -679,6 +696,7 @@ class Entity(BaseModel):
     tint: int = 0xFFFFFF # RBG tint
     size: int = 200 # Size of image in pixels
     behaviours: list[Behaviour] = Field(default_factory=list)
+    death_visual: str = ""
 
     time_until_update: float = Field(0.0, exclude=True)
 
@@ -940,7 +958,7 @@ class Game(BaseModel):
             self.resources.pop(entity.id, None)
         for behaviour in entity.behaviours:
             await behaviour.on_remove(entity, self)
-        await self.broadcast({"type": "entity/remove", "id": entity.id})
+        await self.broadcast({"type": "entity/remove", "id": entity.id, "visual": entity.death_visual})
 
     async def add_vision(self, entity: Entity):
         new_area = self.revealed_area.union(create_hexagon(entity.position, entity.vision_size))
@@ -1165,6 +1183,7 @@ def load_entities():
             apply_param(entity_data, params, "Image", "image", str)
             apply_param(entity_data, params, "Tint", "tint", int)
             apply_param(entity_data, params, "Size", "size", int)
+            apply_param(entity_data, params, "DeathVisual", "death_visual", str)
 
             params["resource_type"] = resource_type_map[entity_data.pop("ResourceType", "")]
 

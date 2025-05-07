@@ -1,9 +1,10 @@
-import { Assets, Graphics, Text, Container, Sprite } from "pixi.js";
+import { Graphics, Container } from "pixi.js";
 import { addOnTick, removeOnTick, state } from "./state.ts";
 import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
 import { GlowFilter } from "pixi-filters";
 import { Future } from "./async.ts";
+import { animateProjectile, destroySprite, displayDeathVisual, fadeOutGraphics, lerp, makeGraphics, makeSprite } from "./render.ts";
 
 
 const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
@@ -16,11 +17,6 @@ const resourceIcons = {
     [ResourceType.Aether]: "/aether.png",
     [ResourceType.Food]: "/food.png",
 };
-
-
-function lerp(a: number, b: number, t: number): number {
-    return a + (b - a) * t;
-}
 
 
 function onMoveEntity(entity: Entity, durationMs: number) {
@@ -52,140 +48,6 @@ function screenToWorldCoordinates(x: number, y: number): [number, number] {
         (x - state.camera.x) / (1.5 * state.camera.scale.x),
         (y - state.camera.y) / (1.5 * state.camera.scale.x)
     ];
-}
-
-interface SpriteData {
-    url: string | string[];
-    tint?: number | number[];
-    size?: number;
-    mask?: Container;
-    label?: string;
-}
-
-
-const pixiObjectGraveyard: {[templateId: string]: any[]} = {};
-
-
-function makeGraphics(): Graphics {
-    const graveyardArray = pixiObjectGraveyard["<graphics>"];
-    if (graveyardArray && graveyardArray.length != 0) {
-        const graphics = graveyardArray.pop() as Graphics;
-        graphics.clear();
-        return graphics;
-    }
-
-    return new Graphics();
-}
-
-
-function destroyGraphics(graphics: Graphics) {
-    graphics.removeFromParent();
-    graphics.removeAllListeners();
-    let graveyardArray = pixiObjectGraveyard["<graphics>"];
-    if (!graveyardArray) {
-        graveyardArray = [];
-        pixiObjectGraveyard["<graphics>"] = graveyardArray;
-    }
-    graveyardArray.push(graphics);
-}
-
-
-function destroySprite(templateId: string, sprite: Container) {
-    sprite.removeFromParent();
-    sprite.removeAllListeners();
-    let graveyardArray = pixiObjectGraveyard[templateId];
-    if (!graveyardArray) {
-        graveyardArray = [];
-        pixiObjectGraveyard[templateId] = graveyardArray;
-    }
-    graveyardArray.push(sprite);
-}
-
-
-async function makeSprite(templateId: string, data: SpriteData): Promise<Container> {
-    const graveyardArray = pixiObjectGraveyard[templateId];
-    if (graveyardArray && graveyardArray.length != 0) {
-        return graveyardArray.pop();
-    }
-
-    const spriteContainer = new Container();
-
-    if (data.mask) {
-        spriteContainer.addChild(data.mask);
-    }
-
-    if (!data.size) {
-        data.size = 200;
-    }
-
-    let tint_array: number[];
-    if (data.tint) {
-        if (Array.isArray(data.tint)) {
-            tint_array = data.tint;
-        }
-        else {
-            tint_array = [data.tint];
-        }
-    }
-
-    let url_array: string[];
-    if (Array.isArray(data.url)) {
-        url_array = data.url;
-    }
-    else {
-        url_array = [data.url];
-    }
-
-    let workingSize = data.size;
-    for (const [index, url] of url_array.entries()) {
-        const texture = await Assets.load(url)
-        const sprite = Sprite.from(texture);
-        sprite.width = workingSize;
-        sprite.height = workingSize;
-        sprite.anchor = 0.5;
-        spriteContainer.addChild(sprite);
-        workingSize *= 0.75;
-
-        if (data.tint) {
-            sprite.tint = tint_array[index % tint_array.length];
-        }
-
-        if (data.mask) {
-            sprite.mask = data.mask;
-        }
-    }
-
-    if (data.label) {
-        const spriteLabel = new Text();
-        spriteLabel.style.fontSize = 32;
-        spriteLabel.style.fill = "#ffffff";
-        spriteLabel.style.stroke = {
-            color: "#000000",
-            width: 4,
-        };
-        spriteLabel.text = data.label;
-        spriteLabel.y = data.size/2;
-        spriteLabel.scale = 0.9 / state.camera.scale.x;
-        spriteLabel.anchor.set(0.5, 0);
-        spriteLabel.zIndex = 1;
-        spriteContainer.addChild(spriteLabel);
-        spriteLabel.visible = false;
-        spriteLabel.label = "label";
-    }
-
-    const hpBackground = new Graphics();
-    hpBackground.visible = false;
-    hpBackground.roundRect(-data.size / 2, -data.size / 2 - 8, data.size, 16, 4);
-    hpBackground.fill({ color: "#404040" })
-    hpBackground.stroke({ color: "#000000", width: 4 });
-    hpBackground.label = "hpBackground";
-    spriteContainer.addChild(hpBackground);
-
-    const hpFill = new Graphics();
-    hpFill.label = "hpFill";
-    spriteContainer.addChild(hpFill);
-
-    return spriteContainer;
 }
 
 
@@ -316,7 +178,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
             const [currentValue,] = args;
             const selectElement = inputRow.appendChild(document.createElement("select"));
             selectElement.innerHTML = `
-                <option value="">Null</option>
+                <option value=""></option>
                 <option value="Food">Food</option>
                 <option value="Gold">Gold</option>
                 <option value="Stone">Stone</option>
@@ -573,24 +435,65 @@ export async function activate(game_id: string) {
         const source = game.entities[data.source];
         const target = game.entities[data.target];
         if (source && target) {
-            let target_x: number;
-            let target_y: number;
+            let srcX: number;
+            let srcY: number;
+            if (!source.sprite) {
+                srcX = source.position.x;
+                srcY = source.position.y;
+            } else {
+                srcX = source.sprite.x;
+                srcY = source.sprite.y;
+            }
+
+            let targetX: number;
+            let targetY: number;
             if (!target.sprite) {
-                target_x = target.position.x;
-                target_y = target.position.y;
+                targetX = target.position.x;
+                targetY = target.position.y;
+            } else {
+                targetX = target.sprite.x;
+                targetY = target.sprite.y;
             }
-            else {
-                target_x = target.sprite.x;
-                target_y = target.sprite.y;
-            }
+
             const attack = makeGraphics();
-            attack.moveTo(source.position.x, source.position.y);
-            attack.lineTo(target_x, target_y);
-            attack.stroke({ color: "#0060ff", width: 4, pixelLine: true });
+
+            if (data.visual == "laser") {
+                attack.moveTo(srcX, srcY);
+                attack.lineTo(targetX, targetY);
+                attack.stroke({ color: "#ff0080", width: 8, pixelLine: true });
+                fadeOutGraphics(attack, 200);
+            } else if (data.visual == "claws") {
+                for (const y of [0, 40, 80]) {
+                    attack.moveTo(-60, y);
+                    attack.bezierCurveTo(-40, -30+y, 40, -30+y, 60, y);
+                    attack.stroke({ color: "#880088", width: 20, cap: "round"});
+                }
+                attack.x = targetX;
+                attack.y = targetY;
+                attack.rotation = Math.atan2(targetY - srcY, targetX - srcX) + Math.PI/2;
+                fadeOutGraphics(attack, 200);
+            } else if (data.visual == "arrow") {
+                attack.moveTo(-50, 0);
+                attack.lineTo(-55, -10);
+                attack.lineTo(-35, -10);
+                attack.lineTo(-35, -3);
+                attack.lineTo(40, -3);
+                attack.lineTo(35, -15);
+                attack.lineTo(55, 0);
+                attack.lineTo(35, 15);
+                attack.lineTo(40, 3);
+                attack.lineTo(-35, 3);
+                attack.lineTo(-35, 10);
+                attack.lineTo(-55, 10);
+                attack.lineTo(-50, 0);
+                attack.fill({ color: "#888888" });
+                attack.x = srcX;
+                attack.y = srcY;
+                attack.rotation = Math.atan2(targetY - srcY, targetX - srcX);
+                animateProjectile(attack, srcX, srcY, targetX, targetY, 200);
+            }
+
             state.camera.addChild(attack);
-            setTimeout(() => {
-                destroyGraphics(attack);
-            }, 100);
         }
     });
 
@@ -616,8 +519,9 @@ export async function activate(game_id: string) {
 
         if (entity.sprite) {
             setTimeout(() => {
+                displayDeathVisual(entity.sprite.x, entity.sprite.y, data.visual);
                 destroySprite(entity.name, entity.sprite);
-            }, 100);
+            }, 200);
         }
         enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });
