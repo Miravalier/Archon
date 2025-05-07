@@ -11,6 +11,7 @@ interface State {
     overlay: HTMLDivElement;
     gridSize: number;
     onTick: {[id: string]: OnTickCallback};
+    onEscape: (ev: KeyboardEvent) => void;
     onBackgroundClick: (ev: MouseEvent) => void;
     onRightClick: (ev: MouseEvent) => void;
 }
@@ -23,6 +24,7 @@ export const state: State = {
     overlay: null,
     gridSize: 100,
     onTick: {},
+    onEscape: null,
     onBackgroundClick: null,
     onRightClick: null,
 };

@@ -3,6 +3,7 @@ import { addOnTick, removeOnTick, state } from "./state.ts";
 import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
 import { GlowFilter } from "pixi-filters";
+import { Future } from "./async.ts";
 
 
 const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
@@ -107,7 +108,6 @@ async function makeSprite(templateId: string, data: SpriteData): Promise<Contain
         return graveyardArray.pop();
     }
 
-    console.log("Creating new Sprite for", templateId);
     const spriteContainer = new Container();
 
     if (data.mask) {
@@ -204,12 +204,179 @@ function setHealthPercent(entity: Entity) {
 }
 
 
-function selectEntity(game: Game, entityId: string) {
+let selectingLocation: boolean = false;
+let selectingLocationController: AbortController = null;
+let selectingSpriteId: string = null;
+let selectingLocationSprite: Container = null;
+let lastSelectedLocation: Position = null;
+let selectingLocationCancelled: boolean = false;
+
+async function selectLocation(game: Game, icon: string): Promise<Position> {
+    if (selectingLocation) {
+        return null;
+    }
+
+    const future = new Future<Position>();
+    const controller = new AbortController();
+    controller.signal.addEventListener("abort", () => {
+        if (selectingLocationCancelled) {
+            future.resolve(null);
+        } else {
+            future.resolve(lastSelectedLocation);
+        }
+        destroySprite(selectingSpriteId, selectingLocationSprite);
+
+        selectingLocation = false;
+        selectingLocationController = null;
+        selectingSpriteId = null;
+        selectingLocationSprite = null;
+        lastSelectedLocation = null;
+    });
+
+    selectingLocation = true;
+    selectingLocationController = controller;
+    selectingSpriteId = `select-icon:${icon}`;
+    selectingLocationSprite = await makeSprite(selectingSpriteId, { url: icon });
+    lastSelectedLocation = null;
+    selectingLocationCancelled = false;
+
+    const sprite = selectingLocationSprite;
+    sprite.alpha = 0.5;
+    state.camera.addChild(sprite);
+    state.app.canvas.addEventListener("mousemove", async moveEv => {
+        const [x, y] = screenToWorldCoordinates(moveEv.clientX, moveEv.clientY);
+        const hexPosition = Position.fromPixels(x, y);
+
+        if (game.map[hexPosition.toString()]) {
+            sprite.tint = 0xff0000;
+            lastSelectedLocation = null;
+        }
+        else {
+            sprite.tint = 0xffffff;
+            lastSelectedLocation = hexPosition;
+        }
+        sprite.x = hexPosition.x;
+        sprite.y = hexPosition.y;
+    }, { signal: controller.signal });
+
+    return await future;
+}
+
+
+async function showCommandPanel(game: Game, entity: Entity) {
+    const actionBar = document.getElementById("action-bar") as HTMLDivElement;
+    actionBar.innerHTML = "";
+    actionBar.classList.remove("disabled");
+
+    const buttonRow = actionBar.appendChild(document.createElement("div"));
+    buttonRow.classList.add("button-row");
+
+    const inputRow = actionBar.appendChild(document.createElement("div"));
+    inputRow.classList.add("input-row");
+
+    const response = await client.send({ "type": "game/query", "game": game.id, "target": entity.id });
+    for (const [key, value] of response.commands) {
+        if (key == "!") {
+            const labelElement = inputRow.appendChild(document.createElement("div"));
+            labelElement.classList.add("label");
+            labelElement.textContent = value;
+            continue;
+        }
+
+        const [valueType, ...args] = value.split(":");
+        if (valueType == "Button") {
+            const [icon, selectPosition] = args;
+
+            const buttonElement = buttonRow.appendChild(document.createElement("img"));
+            buttonElement.src = icon;
+            buttonElement.classList.add("action-button");
+            buttonElement.addEventListener("click", async () => {
+                if (selectPosition == "True") {
+                    const position = await selectLocation(game, icon);
+                    if (position) {
+                        client.send({
+                            "type": "game/command",
+                            "game": game.id,
+                            "target": entity.id,
+                            "key": key,
+                            "value": position.toString(),
+                        });
+                    }
+                } else {
+                    client.send({
+                        "type": "game/command",
+                        "game": game.id,
+                        "target": entity.id,
+                        "key": key,
+                        "value": "",
+                    });
+                }
+            });
+        } else if (valueType == "ResourceType") {
+            const [currentValue,] = args;
+            const selectElement = inputRow.appendChild(document.createElement("select"));
+            selectElement.innerHTML = `
+                <option value="">Null</option>
+                <option value="Food">Food</option>
+                <option value="Gold">Gold</option>
+                <option value="Stone">Stone</option>
+                <option value="Wood">Wood</option>
+                <option value="Aether">Aether</option>
+            `;
+            selectElement.value = currentValue;
+            selectElement.addEventListener("change", () => {
+                client.send({
+                    "type": "game/command",
+                    "game": game.id,
+                    "target": entity.id,
+                    "key": key,
+                    "value": selectElement.value,
+                });
+            });
+        } else if (valueType == "Number") {
+            const [minValue, currentValue, maxValue] = args;
+            const inputElement = inputRow.appendChild(document.createElement("input"));
+            inputElement.type = "number";
+            inputElement.min = minValue;
+            inputElement.max = maxValue;
+            inputElement.step = "1";
+            inputElement.value = currentValue;
+            inputElement.addEventListener("change", () => {
+                client.send({
+                    "type": "game/command",
+                    "game": game.id,
+                    "target": entity.id,
+                    "key": key,
+                    "value": inputElement.value,
+                });
+            });
+        }
+    }
+}
+
+
+async function hideCommandPanel(_: Game) {
+    const actionBar = document.getElementById("action-bar") as HTMLDivElement;
+    actionBar.classList.add("disabled");
+
+    if (selectingLocation) {
+        selectingLocationController.abort();
+    }
+}
+
+
+async function selectEntity(game: Game, entityId: string) {
     game.selected.add(entityId);
 
     const entity = game.entities[entityId];
     if (!entity || !entity.sprite) {
         return;
+    }
+
+    if (game.selected.size == 1) {
+        await showCommandPanel(game, entity);
+    } else {
+        await hideCommandPanel(game);
     }
 
     entity.sprite.filters = [
@@ -218,12 +385,23 @@ function selectEntity(game: Game, entityId: string) {
 }
 
 
-function deselectEntity(game: Game, entityId: string) {
+async function deselectEntity(game: Game, entityId: string) {
     game.selected.delete(entityId);
 
     const entity = game.entities[entityId];
     if (!entity || !entity.sprite) {
         return;
+    }
+
+    if (game.selected.size == 1) {
+        const lastSelectedEntity = game.entities[game.selected.values().next().value];
+        if (lastSelectedEntity) {
+            await showCommandPanel(game, lastSelectedEntity);
+        } else {
+            await hideCommandPanel(game);
+        }
+    } else {
+        await hideCommandPanel(game);
     }
 
     entity.sprite.filters = [];
@@ -258,17 +436,17 @@ async function onEntityCreate(game: Game, entity: Entity) {
                 spriteLabel.visible = false;
             }, { once: true });
         });
-        sprite.addEventListener("mousedown", ev => {
+        sprite.addEventListener("mousedown", async ev => {
             if (!ev.shiftKey) {
                 for (const selectedId of game.selected) {
-                    deselectEntity(game, selectedId);
+                    await deselectEntity(game, selectedId);
                 }
-                selectEntity(game, entity.id);
+                await selectEntity(game, entity.id);
             } else {
                 if (game.selected.has(entity.id)) {
-                    deselectEntity(game, entity.id);
+                    await deselectEntity(game, entity.id);
                 } else {
-                    selectEntity(game, entity.id);
+                    await selectEntity(game, entity.id);
                 }
             }
         });
@@ -277,7 +455,7 @@ async function onEntityCreate(game: Game, entity: Entity) {
     }
     entity.sprite = sprite;
 
-    game.map[entity.position.toKey()] = entity;
+    game.map[entity.position.toString()] = entity;
     game.entities[entity.id] = entity;
     if (entity.entityTag & EntityTag.Unit) {
         game.units[entity.id] = entity;
@@ -329,63 +507,15 @@ export async function activate(game_id: string) {
         resourceAmounts[resourceType] = resourceAmount;
     }
 
-    let placingStructure: boolean = false;
-    const buildBar = overlay.appendChild(document.createElement("div"));
-    buildBar.classList.add("build-bar");
-
-    const farmerButton = buildBar.appendChild(document.createElement("img"));
-    farmerButton.src = "/farmer.png";
-    farmerButton.classList.add("build-button");
-    farmerButton.addEventListener("click", async () => {
-        client.send({ "type": "game/train/worker", "game": game_id });
-    });
-
-    const arrowButton = buildBar.appendChild(document.createElement("img"));
-    arrowButton.src = "/arrow-tower.png";
-    arrowButton.classList.add("build-button");
-    arrowButton.addEventListener("click", async startEv => {
-        if (placingStructure) {
-            return;
-        }
-        const controller = new AbortController();
-        placingStructure = true;
-        const sprite = await makeSprite("arrow-tower-ghost", { url: "/arrow-tower.png" });
-        sprite.alpha = 0.5;
-        state.camera.addChild(sprite);
-        sprite.x = startEv.clientX;
-        sprite.y = startEv.clientY;
-        state.app.canvas.addEventListener("mousemove", async moveEv => {
-            const [x, y] = screenToWorldCoordinates(moveEv.clientX, moveEv.clientY);
-            const hexPosition = Position.from_pixels(x, y);
-            if (game.map[hexPosition.toKey()]) {
-                sprite.tint = 0xff0000;
-            }
-            else {
-                sprite.tint = 0xffffff;
-            }
-            sprite.x = hexPosition.x;
-            sprite.y = hexPosition.y;
-        }, { signal: controller.signal });
-
-        state.app.canvas.addEventListener("click", async clickEv => {
-            const [x, y] = screenToWorldCoordinates(clickEv.clientX, clickEv.clientY);
-            const hexPosition = Position.from_pixels(x, y);
-            if (game.map[hexPosition.toKey()]) {
-                return;
-            }
-            destroySprite("arrow-tower-ghost", sprite);
-            controller.abort();
-            placingStructure = false;
-            client.send({ "type": "game/build/arrow_tower", "game": game_id, "position": { q: hexPosition.q, r: hexPosition.r } });
-        }, { signal: controller.signal });
-    });
-
     state.camera.removeChildren();
 
     let game = await client.getGame(game_id);
     globalThis.game = game;
 
     game.reveal();
+
+    const actionBar = overlay.appendChild(document.createElement("div"));
+    actionBar.id = "action-bar";
 
     const infoRegion = overlay.appendChild(document.createElement("div"));
     infoRegion.classList.add("info-region");
@@ -428,8 +558,8 @@ export async function activate(game_id: string) {
 
             // Move entity
             if (!entity.position.equals(oldPosition)) {
-                delete game.map[oldPosition.toKey()];
-                game.map[entity.position.toKey()] = entity;
+                delete game.map[oldPosition.toString()];
+                game.map[entity.position.toString()] = entity;
                 onMoveEntity(entity, 300);
             }
 
@@ -466,7 +596,9 @@ export async function activate(game_id: string) {
 
     client.subscribe("entity/remove", async data => {
         const entity = game.entities[data.id];
-        deselectEntity(game, data.id);
+        if (game.selected.has(data.id)) {
+            deselectEntity(game, data.id);
+        }
         removeOnTick(data.id);
         delete game.entities[data.id];
         delete game.units[data.id];
@@ -476,7 +608,7 @@ export async function activate(game_id: string) {
         if (!entity) {
             return;
         }
-        delete game.map[entity.position.toKey()];
+        delete game.map[entity.position.toString()];
 
         if (entity.entityTag & EntityTag.Unit && entity.alignment == Alignment.Enemy) {
             game.enemyCount -= 1;
@@ -500,6 +632,13 @@ export async function activate(game_id: string) {
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
     });
 
+    state.onEscape = (_: KeyboardEvent) => {
+        selectingLocationCancelled = true;
+        for (const selectedId of game.selected) {
+            deselectEntity(game, selectedId);
+        }
+    }
+
     state.onBackgroundClick = (ev: MouseEvent) => {
         if (!ev.shiftKey) {
             for (const selectedId of game.selected) {
@@ -510,14 +649,14 @@ export async function activate(game_id: string) {
 
     state.onRightClick = (ev: MouseEvent) => {
         const [x, y] = screenToWorldCoordinates(ev.clientX, ev.clientY);
-        const hexPosition = Position.from_pixels(x, y);
-        const entity = game.map[hexPosition.toKey()];
+        const hexPosition = Position.fromPixels(x, y);
+        const entity = game.map[hexPosition.toString()];
         if (!entity) {
             return;
         }
 
         client.send({
-            type: "game/action",
+            type: "game/target",
             game: game_id,
             selected: Array.from(game.selected),
             target: entity.id,

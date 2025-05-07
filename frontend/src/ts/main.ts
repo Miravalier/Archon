@@ -50,6 +50,14 @@ async function Main() {
         }
     });
 
+    document.body.addEventListener("keydown", ev => {
+        if (ev.key == "Escape") {
+            if (state.onEscape) {
+                state.onEscape(ev);
+            }
+        }
+    });
+
     // Initialize Overlay
     state.overlay = document.body.appendChild(document.createElement("div"));
     state.overlay.id = "overlay";

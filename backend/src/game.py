@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.functional_validators import BeforeValidator
 from pydantic.functional_serializers import PlainSerializer
 from shapely import Polygon, geometry
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Callable, Optional, Type
 
 from .errors import ClientError
 from .handlers import register
@@ -175,6 +175,13 @@ class Position(BaseModel):
             (2/3 * y) / GRID_SIZE
         )
 
+    @classmethod
+    def from_string(cls, s: str) -> Position:
+        return cls(*[int(value.strip()) for value in s.split(",")])
+
+    def to_string(self) -> str:
+        return f"{self.q},{self.r}"
+
 
 class EntityTag(IntEnum):
     Unit = 1
@@ -188,12 +195,35 @@ class Alignment(IntEnum):
     Player = 2
 
 
+entity_tag_map = {
+    "Structure": EntityTag.Structure,
+    "Unit": EntityTag.Unit,
+    "Resource": EntityTag.Resource,
+}
+
+
+resource_type_map = {
+    "": ResourceType.Null,
+    "Food": ResourceType.Food,
+    "Gold": ResourceType.Gold,
+    "Stone": ResourceType.Stone,
+    "Wood": ResourceType.Wood,
+    "Aether": ResourceType.Aether,
+}
+
+
 class Behaviour(BaseModel):
     """
     Abstract base class for all behaviours.
     """
     time_until_activation: float = 0.0 # Time in seconds before the first activation
     cooldown: float = 0.0 # Time in seconds between subsequent activations
+
+    def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
+        """
+        Called when the user requests a list of commands available to this entity.
+        """
+        return []
 
     async def on_tick(self, entity: Entity, game: Game, delta: float):
         """
@@ -223,11 +253,146 @@ class Behaviour(BaseModel):
         """
         pass
 
-    async def on_action(self, entity: Entity, target: Entity, game: Game):
+    async def on_target(self, entity: Entity, target: Entity, game: Game):
         """
-        Called when a user sends an action command with a given target
+        Called when a user sets the target of this behaviour.
         """
         pass
+
+    async def on_command(self, entity: Entity, game: Game, key: str, value: str):
+        """
+        Called when the user issues a command to this behaviour.
+        """
+        pass
+
+    @classmethod
+    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
+        raise NotImplementedError("this class does not implement from_yaml")
+
+
+class BuildBehaviour(Behaviour):
+    unit: str
+    costs: list[tuple[ResourceType, int]]
+    select_position: bool = False
+
+    def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
+        commands = super().on_query(entity, game)
+
+        template = entity_templates[self.unit]
+        commands.append([f"build/{self.unit}", f"Button:{template.image}:{self.select_position}"])
+
+        return commands
+
+    async def on_command(self, entity: Entity, game: Game, key: str, value: str):
+        await super().on_command(entity, game, key, value)
+
+        if key == f"build/{self.unit}":
+            if self.select_position:
+                position = Position.from_string(value)
+                if position in game.map:
+                    raise ClientError("position is occupied")
+                await game.spend(*self.costs)
+                await game.add_entity(self.unit, position, entity.alignment)
+            else:
+                await game.spend(*self.costs)
+                await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+
+    @classmethod
+    def from_yaml(cls, data):
+        costs = []
+        cost_data: list[dict] = data.pop("Costs", [])
+        for cost in cost_data:
+            costs.append((resource_type_map[cost.pop("Resource")], int(cost.pop("Amount"))))
+            if cost:
+                raise KeyError(f"unused cost keys: {list(cost.keys())}")
+        result = cls(
+            costs=costs,
+            unit=data.pop("Unit"),
+            select_position=bool(data.pop("SelectPosition", False)),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+resource_values = {
+    ResourceType.Food: 0.5,
+    ResourceType.Stone: 0.5,
+    ResourceType.Wood: 0.5,
+    ResourceType.Gold: 1.0,
+    ResourceType.Aether: 5.0,
+}
+
+
+class TradingBehaviour(Behaviour):
+    current_rate: int = 0
+    maximum_rate: int = 15
+    efficiency: float = 0.8
+
+    from_resource: ResourceType = ResourceType.Null
+    to_resource: ResourceType = ResourceType.Null
+    remainder: float = 0.0
+
+    def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
+        commands = super().on_query(entity, game)
+        commands.append(["!", "Trading"])
+        commands.append(["rate", f"Number:0:{self.current_rate}:{self.maximum_rate}"])
+        commands.append(["from_resource", f"ResourceType:{self.from_resource.capitalize()}"])
+        commands.append(["!", "for"])
+        commands.append(["to_resource", f"ResourceType:{self.to_resource.capitalize()}"])
+
+        return commands
+
+    async def on_command(self, entity: Entity, game: Game, key: str, value: str):
+        await super().on_command(entity, game, key, value)
+
+        if key == "from_resource":
+            self.from_resource = resource_type_map[value]
+            self.remainder = 0.0
+        elif key == "to_resource":
+            self.to_resource = resource_type_map[value]
+            self.remainder = 0.0
+        elif key == "rate":
+            rate = int(value)
+            if rate > self.maximum_rate or rate < 0:
+                raise ClientError("invalid rate")
+            self.current_rate = rate
+            self.remainder = 0.0
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        if self.from_resource == ResourceType.Null or self.to_resource == ResourceType.Null:
+            return False
+
+        if self.current_rate == 0:
+            return False
+
+        goods_sold = self.current_rate
+        value = goods_sold * resource_values[self.from_resource]
+        goods_purchased_fractional = value / resource_values[self.to_resource] * self.efficiency + self.remainder
+        goods_purchased = int(goods_purchased_fractional)
+        self.remainder = goods_purchased_fractional - goods_purchased
+
+        try:
+            await game.spend([self.from_resource, goods_sold])
+        except ClientError:
+            return False
+
+        await game.add_resource(self.to_resource, goods_purchased)
+        return True
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+            maximum_rate=data.pop("Rate"),
+            efficiency=data.pop("Efficiency"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
 
 
 class AttackBehaviour(Behaviour):
@@ -237,8 +402,8 @@ class AttackBehaviour(Behaviour):
     visual: str = ""
     manual_target: Optional[str] = None
 
-    async def on_action(self, entity, target, game):
-        await super().on_action(entity, target, game)
+    async def on_target(self, entity, target, game):
+        await super().on_target(entity, target, game)
 
         if target.entity_tag & EntityTag.Resource:
             return
@@ -266,6 +431,25 @@ class AttackBehaviour(Behaviour):
         )
         return True
 
+    min_damage: float = 0.0
+    max_damage: float = 0.0
+    visual: str = ""
+    manual_target: Optional[str] = None
+
+    @classmethod
+    def from_yaml(cls, data):
+        min_damage, max_damage = data.pop("Damage")
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+            min_damage=min_damage,
+            max_damage=max_damage,
+            range=data.pop("Range"),
+            visual=data.pop("Visual"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
 
 class SummonBehaviour(Behaviour):
     unit: str
@@ -276,6 +460,16 @@ class SummonBehaviour(Behaviour):
 
         await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
         return True
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+            unit=data.pop("Unit"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
 
 
 class PathingBehaviour(Behaviour):
@@ -322,8 +516,8 @@ class GatherResourcesBehaviour(PathingBehaviour):
     carry_capacity: int = 25
     carry_amount: int = 0
 
-    async def on_action(self, entity: Entity, target: Entity, game: Game):
-        await super().on_action(entity, target, game)
+    async def on_target(self, entity: Entity, target: Entity, game: Game):
+        await super().on_target(entity, target, game)
 
         if not (target.entity_tag & EntityTag.Resource):
             return
@@ -372,6 +566,16 @@ class GatherResourcesBehaviour(PathingBehaviour):
         # We always have something to do
         return True
 
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+            carry_capacity=data.pop("Capacity"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
 
 class RepairBehaviour(PathingBehaviour):
     async def on_activate(self, entity, game):
@@ -402,6 +606,15 @@ class RepairBehaviour(PathingBehaviour):
             await self.move_toward(entity, game, structure.position)
         return True
 
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
 
 class SeekEnemyBehaviour(PathingBehaviour):
     async def on_activate(self, entity: Entity, game: Game) -> bool:
@@ -414,6 +627,15 @@ class SeekEnemyBehaviour(PathingBehaviour):
 
         return await self.move_toward(entity, game, enemy.position)
 
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
 
 class SeekTownHallBehaviour(SeekEnemyBehaviour):
     async def on_activate(self, entity: Entity, game: Game) -> bool:
@@ -421,6 +643,25 @@ class SeekTownHallBehaviour(SeekEnemyBehaviour):
             return True
 
         return await self.move_toward(entity, game, Position(0, 0))
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            cooldown=data.pop("Cooldown"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+behaviour_map = {
+    "Attack": AttackBehaviour,
+    "Summon": SummonBehaviour,
+    "GatherResources": GatherResourcesBehaviour,
+    "SeekTownHall": SeekTownHallBehaviour,
+    "Trading": TradingBehaviour,
+    "Build": BuildBehaviour,
+}
 
 
 class Entity(BaseModel):
@@ -460,9 +701,22 @@ class Entity(BaseModel):
                 return entity
         return None
 
-    async def on_action(self, game: Game, target: Entity):
+    async def on_target(self, game: Game, target: Entity):
         for behaviour in self.behaviours:
-            await behaviour.on_action(self, target, game)
+            await behaviour.on_target(self, target, game)
+
+    async def on_command(self, game: Game, key: str, value: str):
+        for behaviour in self.behaviours:
+            try:
+                await behaviour.on_command(self, game, key, value)
+            except (KeyError, ValueError, ClientError) as e:
+                print(f"OnCommand Error: {type(e)} - {e}")
+
+    def on_query(self, game: Game) -> list[tuple[str, str]]:
+        commands = []
+        for behaviour in self.behaviours:
+            commands.extend(behaviour.on_query(self, game))
+        return commands
 
 
 def create_hexagon(position: Position, size: int) -> Polygon:
@@ -615,10 +869,10 @@ class Game(BaseModel):
         await self.add_entity("Arrow Tower", Position(0, 3), Alignment.Player)
 
     async def generate_resources(self):
-        for q in range(-500, 501):
-            for r in range(-500, 501):
+        for q in range(-100, 101):
+            for r in range(-100, 101):
                 position = Position(q, r)
-                if position.s < -500 or position.s > 500:
+                if position.s < -100 or position.s > 100:
                     continue
                 if position in self.map:
                     continue
@@ -809,6 +1063,7 @@ async def handle_game_create(connection: Connection):
     await game.place_town_hall()
     await game.generate_resources()
     games[game.id] = game
+    print("Game ID:", game.id)
     return game.model_dump()
 
 
@@ -843,13 +1098,13 @@ async def handle_build_tower(connection: Connection, request: BuildRequest):
     await request.game.add_entity("Arrow Tower", request.position, Alignment.Player)
 
 
-class ActionRequest(GameRequest):
+class SetTargetRequest(GameRequest):
     selected: list[str]
     target: str
 
 
-@register("game/action")
-async def handle_take_action(connection: Connection, request: ActionRequest):
+@register("game/target")
+async def handle_set_target(connection: Connection, request: SetTargetRequest):
     target_entity = request.game.entities.get(request.target)
     if target_entity is None:
         return
@@ -858,68 +1113,79 @@ async def handle_take_action(connection: Connection, request: ActionRequest):
         selected_entity = request.game.entities.get(selected_id)
         if selected_entity is None or selected_entity.alignment != Alignment.Player:
             continue
-        await selected_entity.on_action(request.game, target_entity)
+        await selected_entity.on_target(request.game, target_entity)
 
 
-entity_templates: dict[str, Entity] = {
-    "Stone": Entity(
-        entity_tag=EntityTag.Resource,
-        resource_type=ResourceType.Stone,
-        image="/rock.png",
-        tint=0x808080,
-    ),
-    "Food": Entity(
-        entity_tag=EntityTag.Resource,
-        resource_type=ResourceType.Food,
-        image="/wheat.png",
-        tint=0xffff00,
-    ),
-    "Wood": Entity(
-        entity_tag=EntityTag.Resource,
-        resource_type=ResourceType.Wood,
-        image="/forest.png",
-        tint=0x40a010,
-    ),
-    "Town Hall": Entity(
-        entity_tag=EntityTag.Structure,
-        max_hp=100,
-        image="/castle.png",
-        size=500,
-    ),
-    "Arrow Tower": Entity(
-        entity_tag=EntityTag.Structure,
-        max_hp=15,
-        image="/tower.png,/arrow-tower.png",
-        behaviours=[
-            AttackBehaviour(cooldown=1.0, range=6, min_damage=4.0, max_damage=6.0, visual="arrow"),
-        ],
-    ),
-    "Voidling": Entity(
-        entity_tag=EntityTag.Unit,
-        max_hp=5,
-        image="/voidling.png",
-        behaviours=[
-            SeekTownHallBehaviour(cooldown=1.0),
-            AttackBehaviour(cooldown=1.0, range=1, min_damage=0.75, max_damage=1.25, visual="claws"),
-        ],
-    ),
-    "Portal": Entity(
-        entity_tag=EntityTag.Structure,
-        max_hp=100,
-        image="/portal.png",
-        behaviours=[
-            SummonBehaviour(cooldown=5.0, unit="Voidling"),
-        ]
-    ),
-    "Worker": Entity(
-        entity_tag=EntityTag.Unit,
-        image="/farmer.png",
-        max_hp=10,
-        behaviours=[
-            GatherResourcesBehaviour(cooldown=1.0, carry_capacity=25),
-        ]
-    ),
-}
+class CommandRequest(GameRequest):
+    target: str
+    key: str
+    value: str
+
+
+@register("game/command")
+async def handle_command(connection: Connection, request: CommandRequest):
+    target_entity = request.game.entities.get(request.target)
+    if target_entity is None:
+        return
+
+    await target_entity.on_command(request.game, request.key, request.value)
+
+
+class QueryRequest(GameRequest):
+    target: str
+
+
+@register("game/query")
+async def handle_query(connection: Connection, request: QueryRequest):
+    target_entity = request.game.entities.get(request.target)
+    if target_entity is None:
+        return {"error": "invalid entity id"}
+
+    return {"commands": target_entity.on_query(request.game)}
+
+
+entity_templates: dict[str, Entity] = {}
+
+
+def load_entities():
+    def apply_param(entity_data: dict, params: dict, yaml_key: str, param_key: str, validator: Callable):
+        value = entity_data.pop(yaml_key, None)
+        if value is None:
+            return
+        params[param_key] = validator(value)
+
+    with open("/data/entities.yaml") as f:
+        entity_collection: dict[str, dict] = yaml.safe_load(f)
+
+    for name, entity_data in entity_collection.items():
+        try:
+            params = {}
+
+            apply_param(entity_data, params, "HP", "max_hp", int)
+            apply_param(entity_data, params, "Image", "image", str)
+            apply_param(entity_data, params, "Tint", "tint", int)
+            apply_param(entity_data, params, "Size", "size", int)
+
+            params["resource_type"] = resource_type_map[entity_data.pop("ResourceType", "")]
+
+            entity_tag = 0
+            for tag in entity_data.pop("Tags", []):
+                entity_tag |= entity_tag_map[tag]
+            params["entity_tag"] = entity_tag
+
+            behaviours: list[Behaviour] = []
+            for behaviour_data in entity_data.pop("Behaviours", []):
+                behaviour_class: Type[Behaviour] = behaviour_map[behaviour_data.pop("Type")]
+                behaviours.append(behaviour_class.from_yaml(behaviour_data))
+            params["behaviours"] = behaviours
+
+            if entity_data:
+                raise KeyError(f"unused keys: {list(entity_data.keys())}")
+
+            entity_templates[name] = Entity(**params)
+        except BaseException as e:
+            print(f'[!] Failed to load entity "{name}":')
+            traceback.print_exception(e)
 
 
 async def game_thread():

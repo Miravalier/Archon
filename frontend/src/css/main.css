@@ -75,23 +75,46 @@ body {
     font-size: 1.5em;
 }
 
-.build-bar {
+#action-bar {
     position: absolute;
     bottom: 0;
     background: #00000030;
     padding: 4px;
     border-radius: 12px;
+    pointer-events: auto;
 }
 
-.build-button:hover {
+#action-bar .button-row {
+    display: flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+}
+
+#action-bar .input-row {
+    display: flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+}
+
+#action-bar .input-row .label {
+    margin: 4px;
+    color: white;
+}
+
+#action-bar .input-row * {
+    color: black;
+}
+
+.action-button:hover {
     filter: drop-shadow(0 0 8px #a0d0ff);
 }
 
-.build-button {
+.action-button {
     height: 4em;
     width: 4em;
     cursor: pointer;
-    pointer-events: auto;
     margin: 4px;
 }
 

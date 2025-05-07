@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .errors import AuthError, ClientError
-from .game import game_thread
+from .game import game_thread, load_entities
 from .subscriptions import router as subscriptions_router
 # from .twitch import router as twitch_router
 
@@ -44,4 +44,5 @@ app.include_router(subscriptions_router)
 
 
 if __name__ == '__main__':
+    load_entities()
     uvicorn.run(app, port=80, host="0.0.0.0")

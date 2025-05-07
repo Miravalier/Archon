@@ -1,0 +1,91 @@
+Stone:
+  Tags:
+    - Resource
+  ResourceType: Stone
+  Image: "/rock.png"
+  Tint: 0x808080
+
+Food:
+  Tags:
+    - Resource
+  ResourceType: Food
+  Image: "/wheat.png"
+  Tint: 0xffff00
+
+Wood:
+  Tags:
+    - Resource
+  ResourceType: Wood
+  Image: "/forest.png"
+  Tint: 0x40a010
+
+Town Hall:
+  Tags:
+    - Structure
+  HP: 100
+  Image: "/castle.png"
+  Size: 500
+  Behaviours:
+    - Type: Trading
+      Cooldown: 1.0
+      Rate: 10
+      Efficiency: 0.8
+    - Type: Build
+      Unit: "Worker"
+      Costs:
+        - Resource: Gold
+          Amount: 100
+    - Type: Build
+      Unit: "Arrow Tower"
+      SelectPosition: true
+      Costs:
+        - Resource: Wood
+          Amount: 100
+        - Resource: Stone
+          Amount: 100
+
+Arrow Tower:
+  Tags:
+    - Structure
+  HP: 15
+  Image: "/tower.png"
+  Behaviours:
+    - Type: Attack
+      Cooldown: 1.0
+      Range: 6
+      Damage: [4.0, 6.0]
+      Visual: "arrow"
+
+Voidling:
+  Tags:
+    - Unit
+  HP: 5
+  Image: "/voidling.png"
+  Behaviours:
+    - Type: SeekTownHall
+      Cooldown: 1.0
+    - Type: Attack
+      Cooldown: 1.0
+      Range: 1
+      Damage: [0.75, 1.25]
+      Visual: "claws"
+
+Portal:
+  Tags:
+    - Structure
+  HP: 100
+  Image: "/portal.png"
+  Behaviours:
+    - Type: Summon
+      Cooldown: 5.0
+      Unit: "Voidling"
+
+Worker:
+  Tags:
+    - Unit
+  Image: "/farmer.png"
+  HP: 10
+  Behaviours:
+    - Type: GatherResources
+      Cooldown: 1.0
+      Capacity: 25

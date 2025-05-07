@@ -1,4 +1,4 @@
-import { Container } from "pixi.js";
+import { Container, createIdFromString } from "pixi.js";
 import { state } from "./state.ts";
 
 
@@ -73,7 +73,7 @@ export class Position {
         return state.gridSize * 1.5 * (3 / 2 * this.r);
     }
 
-    toKey() {
+    toString() {
         return `${this.q},${this.r}`;
     }
 
@@ -88,7 +88,12 @@ export class Position {
         ]
     }
 
-    public static from_floats(q: number, r: number): Position {
+    public static fromString(s: String): Position {
+        const [q, r] = s.split(",");
+        return new Position({q: parseInt(q), r: parseInt(r)});
+    }
+
+    public static fromFloats(q: number, r: number): Position {
         const q_grid = Math.round(q);
         const r_grid = Math.round(r);
         q -= q_grid;
@@ -101,8 +106,8 @@ export class Position {
         }
     }
 
-    public static from_pixels(x: number, y: number): Position {
-        return Position.from_floats(
+    public static fromPixels(x: number, y: number): Position {
+        return Position.fromFloats(
             (Math.sqrt(3) / 3 * x - 1 / 3 * y) / state.gridSize,
             (2 / 3 * y) / state.gridSize
         )
@@ -205,11 +210,11 @@ export class Game {
         for (const [entityId, rawEntity] of Object.entries(data.entities)) {
             const entity = new Entity(rawEntity);
             this.entities[entityId] = entity;
-            this.map[entity.position.toKey()] = entity;
+            this.map[entity.position.toString()] = entity;
         }
         const origin = new Position({ q: 0, r: 0 });
         for (const neighbor of origin.neighbors) {
-            this.map[neighbor.toKey()] = this.map[origin.toKey()];
+            this.map[neighbor.toString()] = this.map[origin.toString()];
         }
         this.food = data.food;
         this.gold = data.gold;
