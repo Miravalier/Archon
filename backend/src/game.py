@@ -231,12 +231,15 @@ class Behaviour(BaseModel):
         """
         self.time_until_activation -= delta
         if self.time_until_activation <= 0.0:
-            self.time_until_activation += random.uniform(0.95, 1.05) * self.cooldown
-            await self.on_activate(entity, game)
+            # If on_activate fails to do anything, try again in 1/3 the time
+            if await self.on_activate(entity, game):
+                self.time_until_activation += random.uniform(0.95, 1.05) * self.cooldown
+            else:
+                self.time_until_activation += random.uniform(0.95, 1.05) * self.cooldown * 0.33
 
     async def on_create(self, entity: Entity, game: Game):
         """
-        Called when an entity is created.
+        Called when this entity is created.
         """
         pass
 
@@ -253,7 +256,7 @@ class Behaviour(BaseModel):
         """
         pass
 
-    async def on_target(self, entity: Entity, target: Entity, game: Game):
+    async def on_target(self, entity: Entity, game: Game, position: Position):
         """
         Called when a user sets the target of this behaviour.
         """
@@ -265,21 +268,66 @@ class Behaviour(BaseModel):
         """
         pass
 
+    async def on_heal(self, entity: Entity, game: Game, amount: float):
+        """
+        Called when the entity is healed or repaired.
+        """
+        pass
+
     @classmethod
     def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
         raise NotImplementedError("this class does not implement from_yaml")
 
 
+class UnderConstructionBehaviour(Behaviour):
+    unit: str
+    builder: Entity
+    costs: list[tuple[ResourceType, int]]
+
+    async def on_heal(self, entity: Entity, game: Game, amount: float):
+        await super().on_heal(entity, game, amount)
+        if entity.hp == entity.max_hp:
+            await game.remove_entity(entity)
+            await game.add_entity(self.unit, entity.position, entity.alignment)
+
+    async def on_remove(self, entity, game):
+        await super().on_remove(entity, game)
+        for behaviour in self.builder.behaviours:
+            if isinstance(behaviour, PathingBehaviour) and behaviour.target_position == entity.position:
+                behaviour.target_position = None
+
+    def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
+        commands = super().on_query(entity, game)
+        commands.append([f"cancel/{self.unit}", f"Button:/images/symbols/unknown.png:False:Cancel {self.unit}"])
+        return commands
+
+    async def on_command(self, entity: Entity, game: Game, key: str, value: str):
+        await super().on_command(entity, game, key, value)
+
+        if key == f"cancel/{self.unit}":
+            for resource_type, amount in self.costs:
+                await game.add_resource(resource_type, amount//2)
+            await game.remove_entity(entity)
+
+
 class BuildBehaviour(Behaviour):
     unit: str
     costs: list[tuple[ResourceType, int]]
-    select_position: bool = False
+    duration: float = 0.0
+    description: str = ""
+
+    @property
+    def tooltip(self):
+        return "<br>".join((
+            f"Build {self.unit}",
+            "<i>" + f", ".join((f"{amt} {res}" for res, amt in self.costs)) + "</i>",
+        ))
 
     def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
         commands = super().on_query(entity, game)
 
         template = entity_templates[self.unit]
-        commands.append([f"build/{self.unit}", f"Button:{template.image}:{self.select_position}"])
+        commands.append([f"build/{self.unit}", f"Button:{template.image[-1]}:True:{self.tooltip}"])
 
         return commands
 
@@ -287,15 +335,15 @@ class BuildBehaviour(Behaviour):
         await super().on_command(entity, game, key, value)
 
         if key == f"build/{self.unit}":
-            if self.select_position:
-                position = Position.from_string(value)
-                if position in game.map:
-                    raise ClientError("position is occupied")
-                await game.spend(*self.costs)
-                await game.add_entity(self.unit, position, entity.alignment)
-            else:
-                await game.spend(*self.costs)
-                await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+            position = Position.from_string(value)
+            if position in game.map:
+                raise ClientError("position is occupied")
+            await game.spend(*self.costs)
+            await game.build_entity(entity, self, self.unit, position)
+            # If we try to start a building, path toward it
+            for behaviour in entity.behaviours:
+                if isinstance(behaviour, PathingBehaviour):
+                    behaviour.target_position = position
 
     @classmethod
     def from_yaml(cls, data):
@@ -305,10 +353,60 @@ class BuildBehaviour(Behaviour):
             costs.append((resource_type_map[cost.pop("Resource")], int(cost.pop("Amount"))))
             if cost:
                 raise KeyError(f"unused cost keys: {list(cost.keys())}")
+        unit = data.pop("Unit")
         result = cls(
             costs=costs,
-            unit=data.pop("Unit"),
-            select_position=bool(data.pop("SelectPosition", False)),
+            unit=unit,
+            duration=data.pop("Duration", 0.0),
+            description=data.pop("Description", ""),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+class TrainBehaviour(Behaviour):
+    unit: str
+    costs: list[tuple[ResourceType, int]]
+    duration: float = 0.0
+    description: str = ""
+
+    @property
+    def tooltip(self):
+        return "<br>".join((
+            f"Train {self.unit}",
+            "<i>" + f", ".join((f"{amt} {res}" for res, amt in self.costs)) + "</i>",
+        ))
+
+    def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
+        commands = super().on_query(entity, game)
+
+        template = entity_templates[self.unit]
+        commands.append([f"train/{self.unit}", f"Button:{template.image[-1]}:False:{self.tooltip}"])
+
+        return commands
+
+    async def on_command(self, entity: Entity, game: Game, key: str, value: str):
+        await super().on_command(entity, game, key, value)
+
+        if key == f"train/{self.unit}":
+            await game.spend(*self.costs)
+            await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+
+    @classmethod
+    def from_yaml(cls, data):
+        costs = []
+        cost_data: list[dict] = data.pop("Costs", [])
+        for cost in cost_data:
+            costs.append((resource_type_map[cost.pop("Resource")], int(cost.pop("Amount"))))
+            if cost:
+                raise KeyError(f"unused cost keys: {list(cost.keys())}")
+        unit = data.pop("Unit")
+        result = cls(
+            costs=costs,
+            unit=unit,
+            duration=data.pop("Duration", 0.0),
+            description=data.pop("Description", ""),
         )
         if data:
             raise KeyError(f"unused behaviour keys: {list(data.keys())}")
@@ -324,7 +422,7 @@ resource_values = {
 }
 
 
-class TradingBehaviour(Behaviour):
+class TransmuteBehaviour(Behaviour):
     current_rate: int = 0
     maximum_rate: int = 15
     efficiency: float = 0.8
@@ -335,10 +433,10 @@ class TradingBehaviour(Behaviour):
 
     def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
         commands = super().on_query(entity, game)
-        commands.append(["!", "Trading"])
+        commands.append(["!", "Transmuting"])
         commands.append(["rate", f"Number:0:{self.current_rate}:{self.maximum_rate}"])
         commands.append(["from_resource", f"ResourceType:{self.from_resource.capitalize()}"])
-        commands.append(["!", "for"])
+        commands.append(["!", "per second into"])
         commands.append(["to_resource", f"ResourceType:{self.to_resource.capitalize()}"])
 
         return commands
@@ -402,8 +500,17 @@ class AttackBehaviour(Behaviour):
     visual: str = ""
     manual_target: Optional[str] = None
 
-    async def on_target(self, entity: Entity, target: Entity, game: Game):
-        await super().on_target(entity, target, game)
+    async def on_target(self, entity: Entity, game: Game, position: Position):
+        await super().on_target(entity, game, position)
+
+        self.manual_target = None
+
+        target = game.map.get(position)
+        if target is None:
+            return
+
+        if target.id == entity.id:
+            return
 
         if target.entity_tag & EntityTag.Resource:
             return
@@ -430,11 +537,6 @@ class AttackBehaviour(Behaviour):
             self.visual
         )
         return True
-
-    min_damage: float = 0.0
-    max_damage: float = 0.0
-    visual: str = ""
-    manual_target: Optional[str] = None
 
     @classmethod
     def from_yaml(cls, data):
@@ -473,18 +575,35 @@ class SummonBehaviour(Behaviour):
 
 
 class PathingBehaviour(Behaviour):
+    target_position: Optional[Position] = None
     path: list[Position] = Field(default_factory=list)
+
+    async def on_target(self, entity: Entity, game: Game, position: Position):
+        await super().on_target(entity, game, position)
+        self.target_position = None
+
+        if position not in game.map:
+            self.target_position = position
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
 
+        # If we have a pre-calculated path, use that
         if self.path:
             next_position = self.path.pop()
             if next_position in game.map:
                 self.path = []
             else:
                 await game.move_entity(entity, next_position)
+                return True
+
+        # If we have a manually targeted position, move toward that
+        if self.target_position is not None:
+            if entity.position == self.target_position:
+                self.target_position = None
+            else:
+                await self.move_toward(entity, game, self.target_position)
                 return True
 
         return False
@@ -510,61 +629,51 @@ class PathingBehaviour(Behaviour):
         return True
 
 
-class GatherResourcesBehaviour(PathingBehaviour):
+class WorkerBehaviour(PathingBehaviour):
     target_resource: Optional[Entity] = None
     carried_resource: ResourceType = ResourceType.Null
     carry_capacity: int = 25
     carry_amount: int = 0
 
-    async def on_target(self, entity: Entity, target: Entity, game: Game):
-        await super().on_target(entity, target, game)
+    async def on_target(self, entity: Entity, game: Game, position: Position):
+        await super().on_target(entity, game, position)
+        self.target_resource = None
 
-        if not (target.entity_tag & EntityTag.Resource):
-            return
-
-        self.target_resource = target
-
-    async def on_create(self, entity: Entity, game: Game):
-        await super().on_create(entity, game)
-
-        if self.target_resource is None:
-            for position in entity.position.flood_fill():
-                target_entity = game.map.get(position)
-                if target_entity is None:
-                    continue
-                if not (target_entity.entity_tag & EntityTag.Resource):
-                    continue
-                self.target_resource = target_entity
-                break
+        target = game.map.get(position)
+        if target is None or not (target.entity_tag & EntityTag.Resource):
+            self.target_position = position
+        else:
+            self.target_resource = target
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
 
-        # If we're near the town hall and carrying resources, drop them off
+        # If we're near the fortress and carrying resources, drop them off
         if entity.position.magnitude <= 2 and self.carried_resource != ResourceType.Null:
             task = game.add_resource(self.carried_resource, self.carry_amount)
             self.carry_amount = 0
             self.carried_resource = ResourceType.Null
             await task
 
-        # If our inventory is full, path toward the town hall
+        # If our inventory is full, path toward the fortress
         if self.carry_amount == self.carry_capacity:
             await self.move_toward(entity, game, Position(0, 0))
             return True
 
-        # If we're adjacent to the target resource, gather from it
-        if entity.position.distance(self.target_resource.position) == 1:
-            if self.carried_resource != self.target_resource.resource_type:
-                self.carry_amount = 0
-                self.carried_resource = self.target_resource.resource_type
-            self.carry_amount += 5
-        # Otherwise path toward our target resource
+        if self.target_resource is not None:
+            # If we're adjacent to the target resource, gather from it
+            if entity.position.distance(self.target_resource.position) == 1:
+                if self.carried_resource != self.target_resource.resource_type:
+                    self.carry_amount = 0
+                    self.carried_resource = self.target_resource.resource_type
+                self.carry_amount += 5
+            # Otherwise path toward our target resource
+            else:
+                await self.move_toward(entity, game, self.target_resource.position)
+            return True
         else:
-            await self.move_toward(entity, game, self.target_resource.position)
-
-        # We always have something to do
-        return True
+            return False
 
     @classmethod
     def from_yaml(cls, data):
@@ -577,38 +686,32 @@ class GatherResourcesBehaviour(PathingBehaviour):
         return result
 
 
-class RepairBehaviour(PathingBehaviour):
-    async def on_activate(self, entity, game):
+class RepairBehaviour(Behaviour):
+    amount: float = 1.0
+
+    async def on_activate(self, entity: Entity, game: Game):
         if await super().on_activate(entity, game):
             return True
 
-        # Find nearest damaged structure
-        target = None
-        lowest_distance = None
-        for structure in game.structures.values():
+        for position in entity.position.neighbors:
+            structure = game.map.get(position)
+            if structure is None:
+                continue
             if structure.alignment != entity.alignment:
+                continue
+            if not (structure.entity_tag & EntityTag.Structure):
                 continue
             if structure.hp == structure.max_hp:
                 continue
-            distance = entity.position.distance(structure.position)
-            if lowest_distance is None or distance < lowest_distance:
-                lowest_distance = distance
-                target = structure
+            await game.heal_entity(structure, self.amount)
+            return True
 
-        # Nothing to repair
-        if target is None:
-            return False
-
-        # Repair if adjacent, or path to if not adjacent
-        if lowest_distance == 1:
-            structure.hp = min(structure.hp + 5, structure.max_hp)
-        else:
-            await self.move_toward(entity, game, structure.position)
-        return True
+        return False
 
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            amount=float(data.pop("Amount", 1.0)),
             cooldown=data.pop("Cooldown"),
         )
         if data:
@@ -618,28 +721,35 @@ class RepairBehaviour(PathingBehaviour):
 
 class SeekEnemyBehaviour(PathingBehaviour):
     ideal_distance: int = 1
-    manual_target: Optional[str] = None
+    target_entity: Optional[str] = None
 
-    async def on_target(self, entity: Entity, target: Entity, game: Game):
-        await super().on_target(entity, target, game)
+    async def on_target(self, entity: Entity, game: Game, position: Position):
+        await super().on_target(entity, game, position)
 
-        self.manual_target = target.id
+        self.target_entity = None
+
+        target = game.map.get(position)
+        if target is not None:
+            self.target_entity = target.id
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
 
-        manual_target = game.entities.get(self.manual_target)
-        if manual_target is not None:
-            enemy = manual_target
+        # Check for an enemy in vision range
+        target_entity = game.entities.get(self.target_entity)
+        if target_entity is not None:
+            enemy = target_entity
         else:
             enemy = entity.find_enemy_nearby(game, entity.vision_size)
         if enemy is None:
             return False
 
+        # If we're already in our target range, don't move
         if enemy.position.distance(entity.position) <= self.ideal_distance:
             return True
 
+        # Move toward the target
         return await self.move_toward(entity, game, enemy.position)
 
     @classmethod
@@ -653,7 +763,7 @@ class SeekEnemyBehaviour(PathingBehaviour):
         return result
 
 
-class SeekTownHallBehaviour(SeekEnemyBehaviour):
+class SeekFortressBehaviour(SeekEnemyBehaviour):
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
@@ -674,15 +784,18 @@ class SeekTownHallBehaviour(SeekEnemyBehaviour):
 behaviour_map = {
     "Attack": AttackBehaviour,
     "Summon": SummonBehaviour,
-    "GatherResources": GatherResourcesBehaviour,
-    "SeekTownHall": SeekTownHallBehaviour,
-    "Trading": TradingBehaviour,
+    "Worker": WorkerBehaviour,
+    "SeekFortress": SeekFortressBehaviour,
+    "Transmute": TransmuteBehaviour,
     "Build": BuildBehaviour,
+    "Train": TrainBehaviour,
+    "Repair": RepairBehaviour,
 }
 
 
 class Entity(BaseModel):
     id: str = Field(default_factory=generate_id)
+    removed: bool = False
     template: bool = True
     entity_tag: int = 0
     resource_type: ResourceType = ResourceType.Null # Only used if entity_tag contains Resource
@@ -692,7 +805,7 @@ class Entity(BaseModel):
     max_hp: float = 0
     alignment: Alignment = Alignment.Neutral
     vision_size: int = 10
-    image: Optional[str] = None # Comma separated list of PNGs
+    image: list[str] = Field(default_factory=list)
     tint: int = 0xFFFFFF # RBG tint
     size: int = 200 # Size of image in pixels
     behaviours: list[Behaviour] = Field(default_factory=list)
@@ -719,9 +832,14 @@ class Entity(BaseModel):
                 return entity
         return None
 
-    async def on_target(self, game: Game, target: Entity):
+    async def on_target(self, game: Game, position: Position):
         for behaviour in self.behaviours:
-            await behaviour.on_target(self, target, game)
+            await behaviour.on_target(self, game, position)
+        await game.broadcast({
+            "type": "entity/target",
+            "source": self.id,
+            "target": position.model_dump(mode="json"),
+        })
 
     async def on_command(self, game: Game, key: str, value: str):
         for behaviour in self.behaviours:
@@ -729,6 +847,10 @@ class Entity(BaseModel):
                 await behaviour.on_command(self, game, key, value)
             except (KeyError, ValueError, ClientError) as e:
                 print(f"OnCommand Error: {type(e)} - {e}")
+
+    async def on_heal(self, game: Game, amount: float):
+        for behaviour in self.behaviours:
+            await behaviour.on_heal(self, game, amount)
 
     def on_query(self, game: Game) -> list[tuple[str, str]]:
         commands = []
@@ -859,6 +981,14 @@ class Game(BaseModel):
         setattr(self, str(resource_type), getattr(self, str(resource_type)) + amount)
         await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": amount})
 
+    async def heal_entity(self, entity: Entity, amount: float):
+        if entity.hp == entity.max_hp:
+            return
+        actual_amount = min(amount, entity.max_hp - entity.hp)
+        entity.hp += actual_amount
+        self.queue_update(entity)
+        await entity.on_heal(self, actual_amount)
+
     async def handle_attack(self, attacker: Entity, target: Entity, amount: float, visual: str):
         target.hp -= amount
         if target.hp < 0:
@@ -876,15 +1006,16 @@ class Game(BaseModel):
         else:
             self.queue_update(target)
 
-    async def place_town_hall(self):
-        town_hall = await self.add_entity("Town Hall", Position(0, 0), Alignment.Player)
+    async def place_fortress(self):
+        fortress = await self.add_entity("Fortress", Position(0, 0), Alignment.Player)
         for position in Position(0,0).neighbors:
-            self.map[position] = town_hall
+            self.map[position] = fortress
+
+        for position in [Position(0, -3), Position(0, 3), Position(-3, 0), Position(3, 0), Position(3, -3), Position(-3, 3)]:
+            await self.add_entity("Arrow Tower", position, Alignment.Player)
 
         spawn_points = self.generate_spawn_points()
         await self.add_entity("Portal", random.choice(spawn_points), Alignment.Enemy)
-        await self.add_entity("Arrow Tower", Position(0, -3), Alignment.Player)
-        await self.add_entity("Arrow Tower", Position(0, 3), Alignment.Player)
 
     async def generate_resources(self):
         for q in range(-100, 101):
@@ -903,6 +1034,31 @@ class Game(BaseModel):
             valid_positions.remove(position)
             await self.add_entity(resource_type, position)
 
+    async def build_entity(self, builder: Entity, behaviour: BuildBehaviour, name: str, position: Position) -> Entity:
+        if position in self.map:
+            raise RuntimeError("attempted to add entity to occupied position")
+
+        entity = Entity(
+            template=False,
+            image=["/images/symbols/construction.png"],
+            size=150,
+            tint=0x808080,
+            entity_tag=EntityTag.Structure,
+            name=f"<{name}>",
+            position=position,
+            hp=0.0,
+            max_hp=behaviour.duration,
+            alignment=builder.alignment,
+            vision_size=1,
+            behaviours=[
+                UnderConstructionBehaviour(unit=name, costs=behaviour.costs, builder=builder),
+            ],
+            death_visual="Structure",
+        )
+
+        await self.on_new_entity(entity)
+        return entity
+
     async def add_entity(self, name: str, position: Position, alignment: Alignment = Alignment.Neutral) -> Entity:
         if position in self.map:
             raise RuntimeError("attempted to add entity to occupied position")
@@ -918,6 +1074,10 @@ class Game(BaseModel):
         entity.template = False
         entity.behaviours = [behaviour.model_copy() for behaviour in entity.behaviours]
 
+        await self.on_new_entity(entity)
+        return entity
+
+    async def on_new_entity(self, entity: Entity):
         self.entities[entity.id] = entity
         self.map[entity.position] = entity
         if entity.entity_tag & EntityTag.Structure:
@@ -932,7 +1092,6 @@ class Game(BaseModel):
         await self.broadcast({"type": "entity/add", "entity": entity.model_dump(mode="json")})
         for behaviour in entity.behaviours:
             await behaviour.on_create(entity, self)
-        return entity
 
     async def move_entity(self, entity: Entity, position: Position):
         if entity.position == position:
@@ -948,6 +1107,7 @@ class Game(BaseModel):
         self.queue_update(entity)
 
     async def remove_entity(self, entity: Entity):
+        entity.removed = True
         self.entities.pop(entity.id, None)
         self.map.pop(entity.position, None)
         if entity.entity_tag & EntityTag.Structure:
@@ -1078,10 +1238,9 @@ async def handle_user_get(connection: Connection):
 @register("game/create")
 async def handle_game_create(connection: Connection):
     game = Game(id=generate_id(), owner=connection.user.id)
-    await game.place_town_hall()
+    await game.place_fortress()
     await game.generate_resources()
     games[game.id] = game
-    print("Game ID:", game.id)
     return game.model_dump()
 
 
@@ -1097,41 +1256,20 @@ async def handle_game_subscribe(connection: Connection, request: GameRequest):
     return {"type": "success"}
 
 
-class BuildRequest(GameRequest):
-    position: Position
-
-
-@register("game/train/worker")
-async def handle_train_worker(connection: Connection, request: GameRequest):
-    await request.game.spend([ResourceType.Gold, 100])
-    await request.game.add_entity("Worker", request.game.empty_space_near(Position(0, 0)), Alignment.Player)
-
-
-@register("game/build/arrow_tower")
-async def handle_build_tower(connection: Connection, request: BuildRequest):
-    if request.position in request.game.map:
-        raise ClientError("position is occupied")
-
-    await request.game.spend([ResourceType.Wood, 100], [ResourceType.Stone, 100])
-    await request.game.add_entity("Arrow Tower", request.position, Alignment.Player)
-
-
 class SetTargetRequest(GameRequest):
     selected: list[str]
-    target: str
+    position: str
 
 
 @register("game/target")
 async def handle_set_target(connection: Connection, request: SetTargetRequest):
-    target_entity = request.game.entities.get(request.target)
-    if target_entity is None:
-        return
+    position = Position.from_string(request.position)
 
     for selected_id in request.selected:
         selected_entity = request.game.entities.get(selected_id)
         if selected_entity is None or selected_entity.alignment != Alignment.Player:
             continue
-        await selected_entity.on_target(request.game, target_entity)
+        await selected_entity.on_target(request.game, position)
 
 
 class CommandRequest(GameRequest):
@@ -1180,10 +1318,13 @@ def load_entities():
             params = {}
 
             apply_param(entity_data, params, "HP", "max_hp", int)
-            apply_param(entity_data, params, "Image", "image", str)
             apply_param(entity_data, params, "Tint", "tint", int)
             apply_param(entity_data, params, "Size", "size", int)
             apply_param(entity_data, params, "DeathVisual", "death_visual", str)
+
+            image = entity_data.pop("Image", None)
+            if image:
+                params["image"] = ["/images/entities" + src.strip() for src in image.split(",")]
 
             params["resource_type"] = resource_type_map[entity_data.pop("ResourceType", "")]
 

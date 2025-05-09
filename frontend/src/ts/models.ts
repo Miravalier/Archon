@@ -133,7 +133,7 @@ export class Entity {
     maxHp: number;
     alignment: Alignment;
     visionSize: number;
-    image?: string;
+    image: string[];
     tint: number;
     size: number;
 

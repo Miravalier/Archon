@@ -2,46 +2,39 @@ Stone:
   Tags:
     - Resource
   ResourceType: Stone
-  Image: "/rock.png"
+  Image: "/natural/rock.png"
   Tint: 0x808080
 
 Food:
   Tags:
     - Resource
   ResourceType: Food
-  Image: "/wheat.png"
+  Image: "/natural/wheat.png"
   Tint: 0xffff00
 
 Wood:
   Tags:
     - Resource
   ResourceType: Wood
-  Image: "/forest.png"
+  Image: "/natural/forest.png"
   Tint: 0x40a010
 
-Town Hall:
+Fortress:
   Tags:
     - Structure
   HP: 100
-  Image: "/castle.png"
+  Image: "/mages/fortress.png"
   Size: 500
   Behaviours:
-    - Type: Trading
+    - Type: Transmute
       Cooldown: 1.0
       Rate: 10
       Efficiency: 0.8
-    - Type: Build
-      Unit: "Worker"
+    - Type: Train
+      Unit: "Acolyte"
+      Duration: 5.0
       Costs:
         - Resource: Gold
-          Amount: 100
-    - Type: Build
-      Unit: "Arrow Tower"
-      SelectPosition: true
-      Costs:
-        - Resource: Wood
-          Amount: 100
-        - Resource: Stone
           Amount: 100
   DeathVisual: Structure
 
@@ -49,7 +42,7 @@ Arrow Tower:
   Tags:
     - Structure
   HP: 15
-  Image: "/tower.png"
+  Image: "/mages/tower.png,/mages/bow.png"
   Behaviours:
     - Type: Attack
       Cooldown: 1.0
@@ -62,10 +55,10 @@ Voidling:
   Tags:
     - Unit
   HP: 5
-  Image: "/voidling.png"
+  Image: "/void/voidling.png"
   Behaviours:
-    - Type: SeekTownHall
-      Cooldown: 1.0
+    - Type: SeekFortress
+      Cooldown: 0.75
     - Type: Attack
       Cooldown: 1.0
       Range: 1
@@ -77,20 +70,31 @@ Portal:
   Tags:
     - Structure
   HP: 100
-  Image: "/portal.png"
+  Image: "/void/portal.png"
   Behaviours:
     - Type: Summon
       Cooldown: 5.0
       Unit: "Voidling"
   DeathVisual: Void
 
-Worker:
+Acolyte:
   Tags:
     - Unit
-  Image: "/farmer.png"
+  Image: "/mages/acolyte.png"
   HP: 10
   Behaviours:
-    - Type: GatherResources
+    - Type: Worker
       Cooldown: 1.0
       Capacity: 25
+    - Type: Repair
+      Cooldown: 1.0
+      Amount: 1.0
+    - Type: Build
+      Unit: "Arrow Tower"
+      Duration: 10.0
+      Costs:
+        - Resource: Wood
+          Amount: 100
+        - Resource: Stone
+          Amount: 100
   DeathVisual: Blood

@@ -1,7 +1,6 @@
 import { Assets, Container, Graphics, Sprite, Text } from "pixi.js";
 import { addOnTick, removeOnTick, state } from "./state";
 import { generateToken } from "./utils";
-import { Position } from "./models";
 
 
 interface SpriteData {
@@ -13,27 +12,12 @@ interface SpriteData {
 }
 
 
-const pixiObjectGraveyard: {[templateId: string]: any[]} = {};
-
-
 export function lerp(a: number, b: number, t: number): number {
     return a + (b - a) * t;
 }
 
 
 export function makeGraphics(): Graphics {
-    const graveyardArray = pixiObjectGraveyard["<graphics>"];
-    if (graveyardArray && graveyardArray.length != 0) {
-        const graphics = graveyardArray.pop() as Graphics;
-        graphics.clear();
-        graphics.alpha = 1;
-        graphics.x = 0;
-        graphics.y = 0;
-        graphics.rotation = 0;
-        graphics.scale = 1;
-        return graphics;
-    }
-
     return new Graphics();
 }
 
@@ -41,33 +25,34 @@ export function makeGraphics(): Graphics {
 export function destroyGraphics(graphics: Graphics) {
     graphics.removeFromParent();
     graphics.removeAllListeners();
-    let graveyardArray = pixiObjectGraveyard["<graphics>"];
-    if (!graveyardArray) {
-        graveyardArray = [];
-        pixiObjectGraveyard["<graphics>"] = graveyardArray;
-    }
-    graveyardArray.push(graphics);
+    graphics.destroy({
+        context: true,
+        texture: true,
+        textureSource: true,
+    });
 }
 
 
-export function destroySprite(templateId: string, sprite: Container) {
+export function destroySpriteChild(sprite: Container, label: string) {
+    const child = sprite.getChildByLabel(label);
+    if (child) {
+        child.removeFromParent();
+        child.destroy({context: true, texture: true, textureSource: true});
+    }
+}
+
+
+export function destroySprite(sprite: Container) {
     sprite.removeFromParent();
     sprite.removeAllListeners();
-    let graveyardArray = pixiObjectGraveyard[templateId];
-    if (!graveyardArray) {
-        graveyardArray = [];
-        pixiObjectGraveyard[templateId] = graveyardArray;
-    }
-    graveyardArray.push(sprite);
+    destroySpriteChild(sprite, "label");
+    destroySpriteChild(sprite, "hpBackground");
+    destroySpriteChild(sprite, "hpFill");
+    sprite.destroy({children: true, context: true});
 }
 
 
-export async function makeSprite(templateId: string, data: SpriteData): Promise<Container> {
-    const graveyardArray = pixiObjectGraveyard[templateId];
-    if (graveyardArray && graveyardArray.length != 0) {
-        return graveyardArray.pop();
-    }
-
+export async function makeSprite(data: SpriteData): Promise<Container> {
     const spriteContainer = new Container();
 
     if (data.mask) {
@@ -98,7 +83,7 @@ export async function makeSprite(templateId: string, data: SpriteData): Promise<
 
     let workingSize = data.size;
     for (const [index, url] of url_array.entries()) {
-        const texture = await Assets.load(url)
+        const texture = await Assets.load(url);
         const sprite = Sprite.from(texture);
         sprite.width = workingSize;
         sprite.height = workingSize;
@@ -214,22 +199,43 @@ export function displayDeathVisual(x: number, y: number, visual: string) {
     if (visual == "Void") {
         effect.circle(0, 0, 30);
         effect.fill({color: "#880088"})
-        animateExpandAndFade(effect, 1.0, 5.0, 500);
         effect.x = x;
         effect.y = y;
+        animateExpandAndFade(effect, 1.0, 5.0, 500);
     } else if (visual == "Blood") {
         effect.circle(0, 0, 30);
         effect.fill({color: "#600000"})
-        animateExpandAndFade(effect, 1.0, 5.0, 500);
         effect.x = x;
         effect.y = y;
+        animateExpandAndFade(effect, 1.0, 5.0, 500);
     } else if (visual == "Structure") {
         effect.circle(0, 0, 30);
         effect.fill({color: "#ff2f00"})
-        animateExpandAndFade(effect, 1.0, 5.0, 500);
         effect.x = x;
         effect.y = y;
+        animateExpandAndFade(effect, 1.0, 6.0, 600);
     }
 
     state.camera.addChild(effect);
+}
+
+
+export function addTooltip(element: HTMLElement, text: string): HTMLDivElement {
+    const actionBar = document.querySelector("#action-bar");
+    const tooltip = actionBar.appendChild(document.createElement("div"));
+    tooltip.classList.add("tooltip");
+    tooltip.classList.add("disabled");
+    tooltip.innerHTML = text;
+
+    element.addEventListener("mouseenter", () => {
+        const rect = element.getBoundingClientRect();
+        tooltip.classList.remove("disabled");
+        tooltip.style.left = `${Math.round(rect.left + element.clientWidth/2 - tooltip.clientWidth/2)}px`;
+        tooltip.style.bottom = `${document.body.clientHeight - rect.top}px`;
+        element.addEventListener("mouseleave", () => {
+            tooltip.classList.add("disabled");
+        }, {once: true});
+    });
+
+    return tooltip;
 }

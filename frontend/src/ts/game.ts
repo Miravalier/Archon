@@ -4,18 +4,18 @@ import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
 import { GlowFilter } from "pixi-filters";
 import { Future } from "./async.ts";
-import { animateProjectile, destroySprite, displayDeathVisual, fadeOutGraphics, lerp, makeGraphics, makeSprite } from "./render.ts";
+import { addTooltip, animateProjectile, destroySprite, displayDeathVisual, fadeOutGraphics, lerp, makeGraphics, makeSprite } from "./render.ts";
 
 
 const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
 
 
 const resourceIcons = {
-    [ResourceType.Wood]: "/wood.png",
-    [ResourceType.Stone]: "/stone.png",
-    [ResourceType.Gold]: "/gold.png",
-    [ResourceType.Aether]: "/aether.png",
-    [ResourceType.Food]: "/food.png",
+    [ResourceType.Wood]: "/images/symbols/wood.png",
+    [ResourceType.Stone]: "/images/symbols/stone.png",
+    [ResourceType.Gold]: "/images/symbols/gold.png",
+    [ResourceType.Aether]: "/images/symbols/aether.png",
+    [ResourceType.Food]: "/images/symbols/food.png",
 };
 
 
@@ -68,7 +68,6 @@ function setHealthPercent(entity: Entity) {
 
 let selectingLocation: boolean = false;
 let selectingLocationController: AbortController = null;
-let selectingSpriteId: string = null;
 let selectingLocationSprite: Container = null;
 let lastSelectedLocation: Position = null;
 let selectingLocationCancelled: boolean = false;
@@ -86,19 +85,17 @@ async function selectLocation(game: Game, icon: string): Promise<Position> {
         } else {
             future.resolve(lastSelectedLocation);
         }
-        destroySprite(selectingSpriteId, selectingLocationSprite);
+        destroySprite(selectingLocationSprite);
 
         selectingLocation = false;
         selectingLocationController = null;
-        selectingSpriteId = null;
         selectingLocationSprite = null;
         lastSelectedLocation = null;
     });
 
     selectingLocation = true;
     selectingLocationController = controller;
-    selectingSpriteId = `select-icon:${icon}`;
-    selectingLocationSprite = await makeSprite(selectingSpriteId, { url: icon });
+    selectingLocationSprite = await makeSprite({ url: icon });
     lastSelectedLocation = null;
     selectingLocationCancelled = false;
 
@@ -147,7 +144,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
 
         const [valueType, ...args] = value.split(":");
         if (valueType == "Button") {
-            const [icon, selectPosition] = args;
+            const [icon, selectPosition, tooltip] = args;
 
             const buttonElement = buttonRow.appendChild(document.createElement("img"));
             buttonElement.src = icon;
@@ -174,6 +171,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
                     });
                 }
             });
+            addTooltip(buttonElement, tooltip);
         } else if (valueType == "ResourceType") {
             const [currentValue,] = args;
             const selectElement = inputRow.appendChild(document.createElement("select"));
@@ -273,17 +271,17 @@ async function deselectEntity(game: Game, entityId: string) {
 async function onEntityCreate(game: Game, entity: Entity) {
     let sprite: Container;
 
-    let icon: string[] = ["/unknown.png"];
+    let icon: string[] = ["/images/symbols/unknown.png"];
     let tint: number = 0xffffff;
     let size: number = 200;
-    if (entity.image) {
-        icon = entity.image.split(",");
+    if (entity.image && entity.image.length > 0) {
+        icon = entity.image;
         tint = entity.tint;
         size = entity.size;
     }
 
     if (entity.entityTag & (EntityTag.Unit|EntityTag.Structure)) {
-        sprite = await makeSprite(entity.name, { url: icon, tint, size, label: entity.name });
+        sprite = await makeSprite({ url: icon, tint, size, label: entity.name });
         sprite.eventMode = "dynamic";
         const spriteLabel = sprite.getChildByLabel("label");
         sprite.addEventListener("mouseenter", () => {
@@ -313,7 +311,7 @@ async function onEntityCreate(game: Game, entity: Entity) {
             }
         });
     } else {
-        sprite = await makeSprite(entity.name, { url: icon, tint, size });
+        sprite = await makeSprite({ url: icon, tint, size });
     }
     entity.sprite = sprite;
 
@@ -520,7 +518,7 @@ export async function activate(game_id: string) {
         if (entity.sprite) {
             setTimeout(() => {
                 displayDeathVisual(entity.sprite.x, entity.sprite.y, data.visual);
-                destroySprite(entity.name, entity.sprite);
+                destroySprite(entity.sprite);
             }, 200);
         }
         enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
@@ -552,18 +550,16 @@ export async function activate(game_id: string) {
     };
 
     state.onRightClick = (ev: MouseEvent) => {
-        const [x, y] = screenToWorldCoordinates(ev.clientX, ev.clientY);
-        const hexPosition = Position.fromPixels(x, y);
-        const entity = game.map[hexPosition.toString()];
-        if (!entity) {
+        if (game.selected.size == 0) {
             return;
         }
-
+        const [x, y] = screenToWorldCoordinates(ev.clientX, ev.clientY);
+        const hexPosition = Position.fromPixels(x, y);
         client.send({
             type: "game/target",
             game: game_id,
             selected: Array.from(game.selected),
-            target: entity.id,
+            position: hexPosition.toString(),
         });
     };
 }
