@@ -427,6 +427,17 @@ export async function activate(game_id: string) {
         await client.subscribeToGame(game_id);
     });
 
+    client.subscribe("game/end", async data => {
+        const gameOverText = overlay.appendChild(document.createElement("div"));
+        gameOverText.classList.add("game-over");
+        if (data.success) {
+            gameOverText.classList.add("good");
+        } else {
+            gameOverText.classList.add("bad");
+        }
+        gameOverText.textContent = data.label;
+    });
+
     client.subscribe("entity/add", async data => {
         const entity = new Entity(data.entity);
         await onEntityCreate(game, entity);

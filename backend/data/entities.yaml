@@ -26,6 +26,7 @@ Fortress:
   Image: "/mages/fortress.png"
   Size: 500
   Behaviours:
+    - Type: Essential
     - Type: Transmute
       Cooldown: 1.0
       Rate: 10

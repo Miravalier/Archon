@@ -48,6 +48,7 @@ class ResourceType(StrEnum):
 class GameState(StrEnum):
     Lobby = "lobby"
     Active = "active"
+    Finished = "finished"
 
 
 class Position(BaseModel):
@@ -278,6 +279,21 @@ class Behaviour(BaseModel):
     @classmethod
     def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
         raise NotImplementedError("this class does not implement from_yaml")
+
+
+class EssentialBehaviour(Behaviour):
+    async def on_remove(self, entity: Entity, game: Game):
+        await super().on_remove(entity, game)
+
+        if not any(e.name == entity.name for e in game.entities.values()):
+            game.state = GameState.Finished
+            await game.broadcast({"type": "game/end", "success": False, "label": "Defeat"})
+
+    @classmethod
+    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return cls()
 
 
 class UnderConstructionBehaviour(Behaviour):
@@ -901,6 +917,7 @@ behaviour_map = {
     "Build": BuildBehaviour,
     "Train": TrainBehaviour,
     "Repair": RepairBehaviour,
+    "Essential": EssentialBehaviour,
 }
 
 
@@ -1007,6 +1024,7 @@ class Game(BaseModel):
     subscribers: set[Connection] = Field(default_factory=set, exclude=True)
     queued_updates: set[str] = Field(default_factory=set, exclude=True)
 
+    runtime: float = 0.0
     time_since_active: float = 0.0
 
     food: float = 1000.0
@@ -1067,6 +1085,12 @@ class Game(BaseModel):
             self.time_since_active = 0.0
             return
 
+        if self.state == GameState.Active:
+            await self.on_active_tick(delta)
+
+    async def on_active_tick(self, delta: float):
+        self.runtime += delta
+
         for entity in tuple(self.entities.values()):
             await entity.on_tick(self, delta)
 
@@ -1078,7 +1102,8 @@ class Game(BaseModel):
             serialized_entities.append(entity.model_dump(mode="json"))
             entity.time_until_update = random.uniform(5.0, 6.0)
         self.queued_updates.clear()
-        await self.broadcast({"type": "entity/update", "entities": serialized_entities})
+        if serialized_entities:
+            await self.broadcast({"type": "entity/update", "entities": serialized_entities})
 
     async def spend(self, *costs: tuple[ResourceType, int]):
         for resource_type, amount in costs:
@@ -1086,7 +1111,7 @@ class Game(BaseModel):
             if available < amount:
                 raise ClientError(f"not enough {resource_type}")
         for resource_type, amount in costs:
-            setattr(self, str(resource_type), available - amount)
+            setattr(self, str(resource_type), getattr(self, str(resource_type)) - amount)
             await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": -amount})
 
     async def add_resource(self, resource_type: ResourceType, amount: int):
@@ -1355,6 +1380,7 @@ async def handle_game_create(connection: Connection):
     await game.place_fortress()
     await game.generate_resources()
     games[game.id] = game
+    game.state = GameState.Active
     return game.model_dump()
 
 
@@ -1377,6 +1403,9 @@ class SetTargetRequest(GameRequest):
 
 @register("game/target")
 async def handle_set_target(connection: Connection, request: SetTargetRequest):
+    if request.game.state != GameState.Active:
+        return
+
     position = Position.from_string(request.position)
 
     for selected_id in request.selected:
@@ -1394,6 +1423,9 @@ class CommandRequest(GameRequest):
 
 @register("game/command")
 async def handle_command(connection: Connection, request: CommandRequest):
+    if request.game.state != GameState.Active:
+        return
+
     target_entity = request.game.entities.get(request.target)
     if target_entity is None:
         return
