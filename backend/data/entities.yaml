@@ -72,9 +72,17 @@ Portal:
   HP: 100
   Image: "/void/portal.png"
   Behaviours:
-    - Type: Summon
+    - Type: SummonPool
+      Label: summon
       Cooldown: 5.0
-      Unit: "Voidling"
+      Strength: 1
+      Units:
+        Voidling: 1
+    - Type: Empower
+      Cooldown: 10.0
+      Strength: 1
+      EmpoweredBehaviour: summon
+
   DeathVisual: Void
 
 Acolyte:

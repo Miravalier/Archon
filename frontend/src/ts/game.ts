@@ -4,7 +4,19 @@ import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
 import { GlowFilter } from "pixi-filters";
 import { Future } from "./async.ts";
-import { addTooltip, animateProjectile, destroySprite, displayDeathVisual, fadeOutGraphics, lerp, makeGraphics, makeSprite } from "./render.ts";
+import {
+    addTooltip,
+    animateProjectile,
+    destroySprite,
+    displayDeathVisual,
+    fadeOutGraphics,
+    lerp,
+    makeGraphics,
+    makeSprite,
+    allProgressData,
+    ProgressData,
+    addQueueIndicator,
+ } from "./render.ts";
 
 
 const resourceTypes = [ResourceType.Food, ResourceType.Wood, ResourceType.Stone, ResourceType.Gold, ResourceType.Aether];
@@ -122,6 +134,9 @@ async function selectLocation(game: Game, icon: string): Promise<Position> {
 }
 
 
+let activeButtonIndicators: {[id: string]: HTMLDivElement} = {};
+
+
 async function showCommandPanel(game: Game, entity: Entity) {
     const actionBar = document.getElementById("action-bar") as HTMLDivElement;
     actionBar.innerHTML = "";
@@ -133,7 +148,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
     const inputRow = actionBar.appendChild(document.createElement("div"));
     inputRow.classList.add("input-row");
 
-    const response = await client.send({ "type": "game/query", "game": game.id, "target": entity.id });
+    const response: {commands: [string, any][]} = await client.send({ "type": "game/query", "game": game.id, "target": entity.id });
     for (const [key, value] of response.commands) {
         if (key == "!") {
             const labelElement = inputRow.appendChild(document.createElement("div"));
@@ -172,15 +187,27 @@ async function showCommandPanel(game: Game, entity: Entity) {
                 }
             });
             addTooltip(buttonElement, tooltip);
+            if (key.startsWith("train/")) {
+                const event = key.split("/")[1];
+                buttonElement.addEventListener("contextmenu", async () => {
+                    client.send({
+                        "type": "game/command",
+                        "game": game.id,
+                        "target": entity.id,
+                        "key": `cancel/${event}`,
+                        "value": "",
+                    });
+                });
+                activeButtonIndicators[`${entity.id}-${event}`] = addQueueIndicator(buttonElement);            }
         } else if (valueType == "ResourceType") {
             const [currentValue,] = args;
             const selectElement = inputRow.appendChild(document.createElement("select"));
             selectElement.innerHTML = `
                 <option value=""></option>
                 <option value="Food">Food</option>
-                <option value="Gold">Gold</option>
-                <option value="Stone">Stone</option>
                 <option value="Wood">Wood</option>
+                <option value="Stone">Stone</option>
+                <option value="Gold">Gold</option>
                 <option value="Aether">Aether</option>
             `;
             selectElement.value = currentValue;
@@ -218,6 +245,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
 async function hideCommandPanel(_: Game) {
     const actionBar = document.getElementById("action-bar") as HTMLDivElement;
     actionBar.classList.add("disabled");
+    activeButtonIndicators = {};
 
     if (selectingLocation) {
         selectingLocationController.abort();
@@ -501,6 +529,13 @@ export async function activate(game_id: string) {
             deselectEntity(game, data.id);
         }
         removeOnTick(data.id);
+        const entityProgressCollection = allProgressData[data.id];
+        if (entityProgressCollection) {
+            for (const event of Object.keys(entityProgressCollection)) {
+                removeOnTick(`${data.id}-${event}`);
+            }
+        }
+        delete allProgressData[data.id];
         delete game.entities[data.id];
         delete game.units[data.id];
         delete game.resources[data.id];
@@ -532,6 +567,50 @@ export async function activate(game_id: string) {
     client.subscribe("resource", async data => {
         game[data.resource_type] += data.amount;
         resourceAmounts[data.resource_type].textContent = game[data.resource_type];
+    });
+
+    client.subscribe("entity/progress", async (data: ProgressData) => {
+        const keyId = `${data.parent}-${data.event}`;
+
+        // Get the progress collection for this entity
+        let entityCollection = allProgressData[data.parent];
+        if (!entityCollection) {
+            entityCollection = {};
+            allProgressData[data.parent] = entityCollection;
+        }
+
+        // Add or remove the data from the entity collection
+        if (data.queue == 0) {
+            const queueIndicator = activeButtonIndicators[keyId];
+            if (queueIndicator) {
+                queueIndicator.classList.add("disabled");
+            }
+            delete entityCollection[data.event];
+            removeOnTick(keyId);
+        } else {
+            entityCollection[data.event] = data;
+            addOnTick(keyId, (deltaMs) => {
+                data.progress += deltaMs/1000;
+
+                const queueIndicator = activeButtonIndicators[keyId];
+                if (!queueIndicator) {
+                    return;
+                }
+                queueIndicator.classList.remove("disabled");
+
+                const queueNumber = queueIndicator.querySelector(".queue-number");
+                queueNumber.textContent = data.queue.toString();
+
+                const progressForeground = queueIndicator.querySelector<HTMLDivElement>(".progress-bar");
+                progressForeground.style.width = `${queueIndicator.clientWidth * (data.progress / data.duration)}px`;
+            });
+        }
+
+        // If the data was removed and there are no more events
+        // for the given entity collection, remove the entire collection
+        if (Object.keys(entityCollection).length == 0) {
+            delete allProgressData[data.parent];
+        }
     });
 
     state.onEscape = (_: KeyboardEvent) => {

@@ -14,7 +14,16 @@ class PriorityQueue(Generic[T, P]):
         self.counter = itertools.count()
 
     def __bool__(self):
-        return bool(self.heap)
+        return self.empty()
+
+    def empty(self) -> bool:
+        while self.heap:
+            item = self.heap[0][-1]
+            if item is None:
+                heapq.heappop(self.heap)
+            else:
+                return True
+        return False
 
     def add(self, item: T, priority: P):
         """

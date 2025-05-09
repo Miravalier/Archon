@@ -109,7 +109,7 @@ class Position(BaseModel):
         return hash((self.q, self.r))
 
     def __eq__(self, value: Position):
-        return self.q == value.q and self.r == value.r
+        return isinstance(value, Position) and self.q == value.q and self.r == value.r
 
     def __add__(self, other: Position) -> Position:
         return Position(q=self.q + other.q, r=self.r + other.r)
@@ -216,6 +216,7 @@ class Behaviour(BaseModel):
     """
     Abstract base class for all behaviours.
     """
+    label: Optional[str] = None
     time_until_activation: float = 0.0 # Time in seconds before the first activation
     cooldown: float = 0.0 # Time in seconds between subsequent activations
 
@@ -357,6 +358,7 @@ class BuildBehaviour(Behaviour):
         result = cls(
             costs=costs,
             unit=unit,
+            label=data.pop("Label", None),
             duration=data.pop("Duration", 0.0),
             description=data.pop("Description", ""),
         )
@@ -370,6 +372,33 @@ class TrainBehaviour(Behaviour):
     costs: list[tuple[ResourceType, int]]
     duration: float = 0.0
     description: str = ""
+
+    queue: int = 0
+    progress: float = 0.0
+
+    async def on_tick(self, entity, game, delta):
+        await super().on_tick(entity, game, delta)
+        if self.queue == 0:
+            self.progress = 0.0
+            return
+        else:
+            self.progress += delta
+
+        if self.progress >= self.duration:
+            self.progress = 0.0
+            self.queue -= 1
+            await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+            await self.send_training_update(entity, game)
+
+    async def send_training_update(self, entity: Entity, game: Game):
+        await game.broadcast({
+            "type": "entity/progress",
+            "parent": entity.id,
+            "event": self.unit,
+            "queue": self.queue,
+            "progress": self.progress,
+            "duration": self.duration,
+        })
 
     @property
     def tooltip(self):
@@ -391,7 +420,14 @@ class TrainBehaviour(Behaviour):
 
         if key == f"train/{self.unit}":
             await game.spend(*self.costs)
-            await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
+            self.queue += 1
+            await self.send_training_update(entity, game)
+        elif key == f"cancel/{self.unit}":
+            if self.queue > 0:
+                for resource_type, amount in self.costs:
+                    await game.add_resource(resource_type, amount//2)
+                self.queue -= 1
+                await self.send_training_update(entity, game)
 
     @classmethod
     def from_yaml(cls, data):
@@ -405,6 +441,7 @@ class TrainBehaviour(Behaviour):
         result = cls(
             costs=costs,
             unit=unit,
+            label=data.pop("Label", None),
             duration=data.pop("Duration", 0.0),
             description=data.pop("Description", ""),
         )
@@ -484,6 +521,7 @@ class TransmuteBehaviour(Behaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             cooldown=data.pop("Cooldown"),
             maximum_rate=data.pop("Rate"),
             efficiency=data.pop("Efficiency"),
@@ -542,6 +580,7 @@ class AttackBehaviour(Behaviour):
     def from_yaml(cls, data):
         min_damage, max_damage = data.pop("Damage")
         result = cls(
+            label=data.pop("Label", None),
             cooldown=data.pop("Cooldown"),
             min_damage=min_damage,
             max_damage=max_damage,
@@ -566,8 +605,74 @@ class SummonBehaviour(Behaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             cooldown=data.pop("Cooldown"),
             unit=data.pop("Unit"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+class StrengthBehaviour(Behaviour):
+    strength: int
+
+
+class SummonPoolBehaviour(StrengthBehaviour):
+    units: dict[str, int]
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+        remaining_strength = self.strength
+        while remaining_strength > 0:
+            options = [(unit, cost) for unit, cost in self.units.items() if cost < remaining_strength]
+            if not options:
+                break
+            unit, cost = random.choice(options)
+            remaining_strength -= cost
+            await game.add_entity(unit, game.empty_space_near(entity.position), entity.alignment)
+        return True
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            label=data.pop("Label", None),
+            cooldown=data.pop("Cooldown"),
+            units=data.pop("Units"),
+            strength=data.pop("Strength"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+class EmpowerBehaviour(StrengthBehaviour):
+    empowered_behaviour: str
+
+    async def on_activate(self, entity: Entity, game: Game) -> bool:
+        if await super().on_activate(entity, game):
+            return True
+
+
+
+        empowered_behaviour = entity.behaviours_by_label.get(self.empowered_behaviour)
+        if empowered_behaviour is None:
+            return False
+        if not isinstance(empowered_behaviour, StrengthBehaviour):
+            return False
+
+        empowered_behaviour.strength += self.strength
+        return True
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            label=data.pop("Label", None),
+            cooldown=data.pop("Cooldown"),
+            empowered_behaviour=data.pop("EmpoweredBehaviour"),
+            strength=data.pop("Strength"),
         )
         if data:
             raise KeyError(f"unused behaviour keys: {list(data.keys())}")
@@ -678,6 +783,7 @@ class WorkerBehaviour(PathingBehaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             cooldown=data.pop("Cooldown"),
             carry_capacity=data.pop("Capacity"),
         )
@@ -711,6 +817,7 @@ class RepairBehaviour(Behaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             amount=float(data.pop("Amount", 1.0)),
             cooldown=data.pop("Cooldown"),
         )
@@ -755,6 +862,7 @@ class SeekEnemyBehaviour(PathingBehaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             ideal_distance=data.pop("Distance", 1),
             cooldown=data.pop("Cooldown"),
         )
@@ -773,6 +881,7 @@ class SeekFortressBehaviour(SeekEnemyBehaviour):
     @classmethod
     def from_yaml(cls, data):
         result = cls(
+            label=data.pop("Label", None),
             ideal_distance=data.pop("Distance", 1),
             cooldown=data.pop("Cooldown"),
         )
@@ -784,6 +893,8 @@ class SeekFortressBehaviour(SeekEnemyBehaviour):
 behaviour_map = {
     "Attack": AttackBehaviour,
     "Summon": SummonBehaviour,
+    "SummonPool": SummonPoolBehaviour,
+    "Empower": EmpowerBehaviour,
     "Worker": WorkerBehaviour,
     "SeekFortress": SeekFortressBehaviour,
     "Transmute": TransmuteBehaviour,
@@ -809,6 +920,7 @@ class Entity(BaseModel):
     tint: int = 0xFFFFFF # RBG tint
     size: int = 200 # Size of image in pixels
     behaviours: list[Behaviour] = Field(default_factory=list)
+    behaviours_by_label: dict[str, Behaviour] = Field(default_factory=dict)
     death_visual: str = ""
 
     time_until_update: float = Field(0.0, exclude=True)
@@ -1053,7 +1165,7 @@ class Game(BaseModel):
             behaviours=[
                 UnderConstructionBehaviour(unit=name, costs=behaviour.costs, builder=builder),
             ],
-            death_visual="Structure",
+            death_visual="Spell",
         )
 
         await self.on_new_entity(entity)
@@ -1065,14 +1177,13 @@ class Game(BaseModel):
 
         template = entity_templates[name]
 
-        entity = template.model_copy()
+        entity = template.model_copy(deep=True)
         entity.id = generate_id()
         entity.name = name
         entity.hp = entity.max_hp
         entity.position = position
         entity.alignment = alignment
         entity.template = False
-        entity.behaviours = [behaviour.model_copy() for behaviour in entity.behaviours]
 
         await self.on_new_entity(entity)
         return entity
@@ -1090,6 +1201,9 @@ class Game(BaseModel):
             await self.add_vision(entity)
 
         await self.broadcast({"type": "entity/add", "entity": entity.model_dump(mode="json")})
+        for behaviour in entity.behaviours:
+            if behaviour.label:
+                entity.behaviours_by_label[behaviour.label] = behaviour
         for behaviour in entity.behaviours:
             await behaviour.on_create(entity, self)
 

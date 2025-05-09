@@ -3,6 +3,19 @@ import { addOnTick, removeOnTick, state } from "./state";
 import { generateToken } from "./utils";
 
 
+export interface ProgressData {
+    type: "entity/progress";
+    parent: string;
+    event: string;
+    queue: number;
+    progress: number;
+    duration: number;
+}
+
+
+export const allProgressData: {[id: string]: {[event: string]: ProgressData}} = {};
+
+
 interface SpriteData {
     url: string | string[];
     tint?: number | number[];
@@ -198,22 +211,28 @@ export function displayDeathVisual(x: number, y: number, visual: string) {
 
     if (visual == "Void") {
         effect.circle(0, 0, 30);
-        effect.fill({color: "#880088"})
+        effect.fill({color: "#880088"});
         effect.x = x;
         effect.y = y;
         animateExpandAndFade(effect, 1.0, 5.0, 500);
     } else if (visual == "Blood") {
         effect.circle(0, 0, 30);
-        effect.fill({color: "#600000"})
+        effect.fill({color: "#600000"});
         effect.x = x;
         effect.y = y;
         animateExpandAndFade(effect, 1.0, 5.0, 500);
     } else if (visual == "Structure") {
         effect.circle(0, 0, 30);
-        effect.fill({color: "#ff2f00"})
+        effect.fill({color: "#ff2f00"});
         effect.x = x;
         effect.y = y;
         animateExpandAndFade(effect, 1.0, 6.0, 600);
+    } else if (visual == "Spell") {
+        effect.circle(0, 0, 30);
+        effect.fill({color: "#0080ff"});
+        effect.x = x;
+        effect.y = y;
+        animateExpandAndFade(effect, 1.0, 5.0, 500);
     }
 
     state.camera.addChild(effect);
@@ -238,4 +257,26 @@ export function addTooltip(element: HTMLElement, text: string): HTMLDivElement {
     });
 
     return tooltip;
+}
+
+
+export function addQueueIndicator(element: HTMLElement): HTMLDivElement {
+    const rect = element.getBoundingClientRect();
+    const actionBar = document.querySelector("#action-bar");
+    const queueIndicator = actionBar.appendChild(document.createElement("div"));
+    queueIndicator.classList.add("queue-indicator");
+    queueIndicator.classList.add("disabled");
+    queueIndicator.style.left = `${rect.left}px`;
+    queueIndicator.style.top = `${rect.top}px`;
+    queueIndicator.style.width = `${rect.width}px`;
+    queueIndicator.style.height = `${rect.height}px`;
+
+    const progressBar = queueIndicator.appendChild(document.createElement("div"));
+    progressBar.classList.add("progress-bar");
+
+    const queueNumber = queueIndicator.appendChild(document.createElement("div"));
+    queueNumber.classList.add("queue-number");
+    queueNumber.textContent = "0";
+
+    return queueIndicator;
 }

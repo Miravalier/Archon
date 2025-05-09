@@ -46,10 +46,13 @@ async def handle_ws_request(connection: Connection, request: dict) -> dict:
 async def ws_subscription(websocket: WebSocket):
     await websocket.accept()
 
-    while True:
-        request: dict = await websocket.receive_json()
-        if request.get("token"):
-            break
+    try:
+        while True:
+            request: dict = await websocket.receive_json()
+            if request.get("token"):
+                break
+    except WebSocketDisconnect:
+        return
 
     token: str = request["token"]
     user = database.users.find_one({"token": token})

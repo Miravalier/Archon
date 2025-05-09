@@ -23,7 +23,7 @@ body {
 }
 
 .disabled {
-    display: none;
+    display: none !important;
 }
 
 * {
@@ -79,8 +79,37 @@ body {
     font-size: 1.5em;
 }
 
-#action-bar {
+.queue-indicator {
+    position: fixed;
+    pointer-events: none;
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: center;
+    align-items: center;
+}
+
+.queue-indicator .progress-bar {
     position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 0;
+    height: 6px;
+    background-color: white;
+    border-radius: 2px;
+}
+
+.queue-indicator .queue-number {
+    padding: 2px 6px;
+    font-size: 24px;
+    text-align: center;
+    text-shadow: #000000 0 0 8px;
+    background-color: #000000b0;
+    border-radius: 50%;
+    color: white;
+}
+
+#action-bar {
+    position: fixed;
     bottom: 0;
     background: #00000030;
     padding: 4px;
