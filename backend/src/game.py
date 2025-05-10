@@ -286,8 +286,21 @@ class EssentialBehaviour(Behaviour):
         await super().on_remove(entity, game)
 
         if not any(e.name == entity.name for e in game.entities.values()):
-            game.state = GameState.Finished
-            await game.broadcast({"type": "game/end", "success": False, "label": "Defeat"})
+            await game.end(False, "Defeat")
+
+    @classmethod
+    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return cls()
+
+
+class KillObjectiveBehaviour(Behaviour):
+    async def on_remove(self, entity: Entity, game: Game):
+        await super().on_remove(entity, game)
+
+        if not any(e.name == entity.name for e in game.entities.values()):
+            await game.end(True, "Victory")
 
     @classmethod
     def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
@@ -918,6 +931,7 @@ behaviour_map = {
     "Train": TrainBehaviour,
     "Repair": RepairBehaviour,
     "Essential": EssentialBehaviour,
+    "KillObjective": KillObjectiveBehaviour,
 }
 
 
@@ -1035,7 +1049,11 @@ class Game(BaseModel):
 
     revealed_area: GamePolygon = Field(default_factory=generate_starting_vision)
 
-    def end(self):
+    async def end(self, success: bool, label: str):
+        self.state = GameState.Finished
+        await self.broadcast({"type": "game/end", "success": success, "label": label})
+
+    def destroy(self):
         games.pop(self.id, None)
 
     def queue_update(self, entity: Entity):
@@ -1077,7 +1095,7 @@ class Game(BaseModel):
             else:
                 self.time_since_active += delta
                 if self.time_since_active > 30.0:
-                    self.end()
+                    self.destroy()
                 return
 
         if not self.subscribers:

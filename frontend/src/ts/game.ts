@@ -432,10 +432,11 @@ export async function activate(game_id: string) {
         gameOverText.classList.add("game-over");
         if (data.success) {
             gameOverText.classList.add("good");
+            gameOverText.textContent = data.label.toUpperCase();
         } else {
             gameOverText.classList.add("bad");
+            gameOverText.textContent = data.label;
         }
-        gameOverText.textContent = data.label;
     });
 
     client.subscribe("entity/add", async data => {
@@ -497,16 +498,17 @@ export async function activate(game_id: string) {
             if (data.visual == "laser") {
                 attack.moveTo(srcX, srcY);
                 attack.lineTo(targetX, targetY);
-                attack.stroke({ color: "#ff0080", width: 8, pixelLine: true });
+                attack.stroke({ color: "#880088", width: 8, pixelLine: true });
                 fadeOutGraphics(attack, 200);
             } else if (data.visual == "claws") {
-                for (const y of [0, 40, 80]) {
-                    attack.moveTo(-60, y);
-                    attack.bezierCurveTo(-40, -30+y, 40, -30+y, 60, y);
-                    attack.stroke({ color: "#880088", width: 20, cap: "round"});
+                for (const [x, y] of [[60, -240], [80, -210], [70, -180]]) {
+                    attack.moveTo(-x, y);
+                    attack.bezierCurveTo(-36, y-24, 36, y-24, x, y);
+                    attack.bezierCurveTo(-36, y-12, 36, y-12, -x, y);
+                    attack.fill({ color: "#880088"});
                 }
-                attack.x = targetX;
-                attack.y = targetY;
+                attack.x = srcX;
+                attack.y = srcY;
                 attack.rotation = Math.atan2(targetY - srcY, targetX - srcX) + Math.PI/2;
                 fadeOutGraphics(attack, 200);
             } else if (data.visual == "arrow") {
