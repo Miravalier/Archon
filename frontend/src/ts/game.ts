@@ -452,7 +452,7 @@ export async function activate(game_id: string) {
         }
 
         if (data.status == "stealth") {
-            entity.sprite.alpha = 0.5;
+            entity.sprite.alpha = 0.15;
         }
     });
 
