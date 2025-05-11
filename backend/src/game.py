@@ -270,6 +270,12 @@ class Behaviour(BaseModel):
         """
         pass
 
+    async def on_hit(self, entity: Entity, game: Game, source: Entity, amount: float) -> float:
+        """
+        Called when another entity deals damage to this one.
+        """
+        return amount
+
     async def on_heal(self, entity: Entity, game: Game, amount: float):
         """
         Called when the entity is healed or repaired.
@@ -554,6 +560,53 @@ class TransmuteBehaviour(Behaviour):
             cooldown=data.pop("Cooldown"),
             maximum_rate=data.pop("Rate"),
             efficiency=data.pop("Efficiency"),
+        )
+        if data:
+            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
+        return result
+
+
+class StealthBehaviour(Behaviour):
+    cooldown: float
+    duration: float
+
+    active: bool = False
+    status_id: Optional[str] = None
+    remaining_time: float = 0.0
+
+    async def on_tick(self, entity: Entity, game: Game, delta: float):
+        await super().on_tick(entity, game, delta)
+
+        if self.active:
+            self.remaining_time -= delta
+            if self.remaining_time <= 0.0:
+                self.active = False
+                await entity.remove_status_by_id(game, self.status_id)
+                self.status_id = None
+        else:
+            self.remaining_time += delta
+
+    async def on_hit(self, entity: Entity, game: Game, source: Entity, amount: float) -> float:
+        amount = await super().on_hit(entity, game, source, amount)
+
+        # If active, take no damage
+        if self.active:
+            return 0.0
+
+        # If cooldown has elapsed, activate stealth
+        if self.remaining_time >= self.cooldown:
+            self.active = True
+            self.remaining_time = self.duration
+            self.status_id = await entity.add_status(game, "stealth")
+
+        return amount
+
+    @classmethod
+    def from_yaml(cls, data):
+        result = cls(
+            label=data.pop("Label", None),
+            cooldown=data.pop("Cooldown"),
+            duration=data.pop("Duration"),
         )
         if data:
             raise KeyError(f"unused behaviour keys: {list(data.keys())}")
@@ -932,6 +985,7 @@ behaviour_map = {
     "Repair": RepairBehaviour,
     "Essential": EssentialBehaviour,
     "KillObjective": KillObjectiveBehaviour,
+    "Stealth": StealthBehaviour,
 }
 
 
@@ -953,10 +1007,52 @@ class Entity(BaseModel):
     behaviours: list[Behaviour] = Field(default_factory=list)
     behaviours_by_label: dict[str, Behaviour] = Field(default_factory=dict)
     death_visual: str = ""
+    status_counts: dict[str,int] = Field(default_factory=dict)
+    status_ids: dict[str,str] = Field(default_factory=dict)
 
     time_until_update: float = Field(0.0, exclude=True)
 
+    async def add_status(self, game: Game, status: str) -> str:
+        status_id = generate_id()
+        self.status_ids[status_id] = status
+        existing_count = self.status_counts.get(status, 0)
+        self.status_counts[status] = existing_count + 1
+        if existing_count == 0:
+            await game.broadcast({"type": "entity/status/add", "id": self.id, "status": status})
+        return status_id
+
+    async def remove_status_by_id(self, game: Game, status_id: str):
+        status = self.status_ids.pop(status_id, None)
+        if status is None:
+            return
+
+        remaining_count = self.status_counts.get(status, 0) - 1
+        if remaining_count < 0:
+            return
+
+        self.status_counts[status] = remaining_count
+
+        if remaining_count == 0:
+            await game.broadcast({"type": "entity/status/remove", "id": self.id, "status": status})
+
+    async def remove_status_by_type(self, game: Game, status: str):
+        status_ids_to_remove = []
+        for status_id, stored_status in self.status_ids.items():
+            if stored_status == status:
+                status_ids_to_remove.append(status_id)
+
+        for status_id in status_ids_to_remove:
+            await self.remove_status_by_id(game, status_id)
+
+    def has_status(self, status: str) -> bool:
+        return self.status_counts.get(status, 0) > 0
+
     async def on_tick(self, game: Game, delta: float):
+        # If this entity has *only* the resource tag, don't
+        # worry about updates or behaviours.
+        if self.resource_type == EntityTag.Resource:
+            return
+
         self.time_until_update -= delta
         if self.time_until_update <= 0.0:
             game.queue_update(self)
@@ -970,6 +1066,8 @@ class Entity(BaseModel):
             if entity is None:
                 continue
             if entity.alignment == Alignment.Neutral:
+                continue
+            if entity.has_status("stealth"):
                 continue
             if entity.alignment != self.alignment:
                 return entity
@@ -994,6 +1092,11 @@ class Entity(BaseModel):
     async def on_heal(self, game: Game, amount: float):
         for behaviour in self.behaviours:
             await behaviour.on_heal(self, game, amount)
+
+    async def on_hit(self, game: Game, source: Entity, amount: float) -> float:
+        for behaviour in self.behaviours:
+            amount = await behaviour.on_hit(self, game, source, amount)
+        return amount
 
     def on_query(self, game: Game) -> list[tuple[str, str]]:
         commands = []
@@ -1145,6 +1248,8 @@ class Game(BaseModel):
         await entity.on_heal(self, actual_amount)
 
     async def handle_attack(self, attacker: Entity, target: Entity, amount: float, visual: str):
+        amount = await target.on_hit(self, attacker, amount)
+
         target.hp -= amount
         if target.hp < 0:
             target.hp = 0

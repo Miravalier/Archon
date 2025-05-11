@@ -445,6 +445,28 @@ export async function activate(game_id: string) {
         enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });
 
+    client.subscribe("entity/status/add", async data => {
+        const entity = game.entities[data.id];
+        if (!entity || !entity.sprite) {
+            return;
+        }
+
+        if (data.status == "stealth") {
+            entity.sprite.alpha = 0.5;
+        }
+    });
+
+    client.subscribe("entity/status/remove", async data => {
+        const entity = game.entities[data.id];
+        if (!entity || !entity.sprite) {
+            return;
+        }
+
+        if (data.status == "stealth") {
+            entity.sprite.alpha = 1.0;
+        }
+    });
+
     client.subscribe("entity/update", async data => {
         for (const entityUpdate of data.entities) {
             const entity = game.entities[entityUpdate.id];

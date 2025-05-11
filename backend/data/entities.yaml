@@ -52,40 +52,6 @@ Arrow Tower:
       Visual: "arrow"
   DeathVisual: Structure
 
-Voidling:
-  Tags:
-    - Unit
-  HP: 5
-  Image: "/void/voidling.png"
-  Behaviours:
-    - Type: SeekFortress
-      Cooldown: 0.75
-    - Type: Attack
-      Cooldown: 1.0
-      Range: 1
-      Damage: [0.75, 1.25]
-      Visual: "claws"
-  DeathVisual: Void
-
-Portal:
-  Tags:
-    - Structure
-  HP: 100
-  Image: "/void/portal.png"
-  Behaviours:
-    - Type: KillObjective
-    - Type: SummonPool
-      Label: summon
-      Cooldown: 10.0
-      Strength: 1
-      Units:
-        Voidling: 1
-    - Type: Empower
-      Cooldown: 30.0
-      Strength: 1
-      EmpoweredBehaviour: summon
-  DeathVisual: Void
-
 Acolyte:
   Tags:
     - Unit
@@ -107,3 +73,58 @@ Acolyte:
         - Resource: Stone
           Amount: 100
   DeathVisual: Blood
+
+Portal:
+  Tags:
+    - Structure
+  HP: 100
+  Image: "/void/portal.png"
+  Behaviours:
+    - Type: KillObjective
+    - Type: SummonPool
+      Label: summon
+      Cooldown: 10.0
+      Strength: 1
+      Units:
+        Voidling: 1
+        Infiltrator: 3
+    - Type: Empower
+      Cooldown: 30.0
+      Strength: 1
+      EmpoweredBehaviour: summon
+  DeathVisual: Void
+
+Voidling:
+  Tags:
+    - Unit
+  HP: 5
+  Image: "/void/background.png,/void/voidling.png"
+  Size: 150
+  Behaviours:
+    - Type: SeekFortress
+      Cooldown: 0.75
+    - Type: Attack
+      Cooldown: 1.0
+      Range: 1
+      Damage: [0.75, 1.25]
+      Visual: "claws"
+  DeathVisual: Void
+
+Infiltrator:
+  Tags:
+    - Unit
+  HP: 10
+  Image: "/void/background.png,/void/infiltrator.png"
+  Behaviours:
+    - Type: SeekFortress
+      Cooldown: 0.9
+    - Type: Attack
+      Cooldown: 1.0
+      Range: 1
+      Damage: [2.0, 3.0]
+      Visual: "claws"
+    - Type: Stealth
+      Cooldown: 10.0
+      Duration: 3.0
+  DeathVisual: Void
+
