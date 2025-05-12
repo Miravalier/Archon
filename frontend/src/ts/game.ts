@@ -3,19 +3,17 @@ import { addOnTick, removeOnTick, state } from "./state.ts";
 import { client } from "./api.ts";
 import { Alignment, Entity, Game, Position, EntityTag, ResourceType } from "./models.ts";
 import { GlowFilter } from "pixi-filters";
-import { Future } from "./async.ts";
+import { Future, Sleep } from "./async.ts";
 import {
     addTooltip,
-    animateProjectile,
     destroySprite,
     displayDeathVisual,
-    fadeOutGraphics,
     lerp,
-    makeGraphics,
     makeSprite,
     allProgressData,
     ProgressData,
     addQueueIndicator,
+    displayAttackVisual,
  } from "./render.ts";
 
 
@@ -515,50 +513,13 @@ export async function activate(game_id: string) {
                 targetY = target.sprite.y;
             }
 
-            const attack = makeGraphics();
-
-            if (data.visual == "laser") {
-                attack.moveTo(srcX, srcY);
-                attack.lineTo(targetX, targetY);
-                attack.stroke({ color: "#880088", width: 8, pixelLine: true });
-                fadeOutGraphics(attack, 200);
-            } else if (data.visual == "claws") {
-                for (const [x, y] of [[60, -240], [80, -210], [70, -180]]) {
-                    attack.moveTo(-x, y);
-                    attack.bezierCurveTo(-36, y-24, 36, y-24, x, y);
-                    attack.bezierCurveTo(-36, y-12, 36, y-12, -x, y);
-                    attack.fill({ color: "#880088"});
-                }
-                attack.x = srcX;
-                attack.y = srcY;
-                attack.rotation = Math.atan2(targetY - srcY, targetX - srcX) + Math.PI/2;
-                fadeOutGraphics(attack, 200);
-            } else if (data.visual == "arrow" || data.visual == "void orb") {
-                attack.moveTo(-50, 0);
-                attack.lineTo(-55, -10);
-                attack.lineTo(-35, -10);
-                attack.lineTo(-35, -3);
-                attack.lineTo(40, -3);
-                attack.lineTo(35, -15);
-                attack.lineTo(55, 0);
-                attack.lineTo(35, 15);
-                attack.lineTo(40, 3);
-                attack.lineTo(-35, 3);
-                attack.lineTo(-35, 10);
-                attack.lineTo(-55, 10);
-                attack.lineTo(-50, 0);
-                attack.fill({ color: "#888888" });
-                attack.x = srcX;
-                attack.y = srcY;
-                attack.rotation = Math.atan2(targetY - srcY, targetX - srcX);
-                animateProjectile(attack, srcX, srcY, targetX, targetY, 200);
-            }
-
-            state.camera.addChild(attack);
+            displayAttackVisual(srcX, srcY, targetX, targetY, data.visual);
         }
     });
 
     client.subscribe("entity/remove", async data => {
+        await Sleep(100);
+
         const entity = game.entities[data.id];
         if (game.selected.has(data.id)) {
             deselectEntity(game, data.id);
@@ -589,7 +550,7 @@ export async function activate(game_id: string) {
             setTimeout(() => {
                 displayDeathVisual(entity.sprite.x, entity.sprite.y, data.visual);
                 destroySprite(entity.sprite);
-            }, 200);
+            }, 100);
         }
         enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });

@@ -35,8 +35,7 @@ Fortress:
       Unit: "Acolyte"
       Duration: 5.0
       Costs:
-        - Resource: Gold
-          Amount: 100
+        - [Gold, 100]
   DeathVisual: Structure
 
 Arrow Tower:
