@@ -203,7 +203,7 @@ async function showCommandPanel(game: Game, entity: Entity) {
             const [currentValue,] = args;
             const selectElement = inputRow.appendChild(document.createElement("select"));
             selectElement.innerHTML = `
-                <option value=""></option>
+                <option value="Null"></option>
                 <option value="Food">Food</option>
                 <option value="Wood">Wood</option>
                 <option value="Stone">Stone</option>
@@ -600,8 +600,9 @@ export async function activate(game_id: string) {
     });
 
     client.subscribe("resource", async data => {
-        game[data.resource_type] += data.amount;
-        resourceAmounts[data.resource_type].textContent = game[data.resource_type];
+        const resourceType = data.resource_type.toLowerCase();
+        game[resourceType] = data.amount;
+        resourceAmounts[resourceType].textContent = data.amount;
     });
 
     client.subscribe("entity/progress", async (data: ProgressData) => {

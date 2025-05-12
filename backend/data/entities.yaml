@@ -48,8 +48,23 @@ Arrow Tower:
     - Type: Attack
       Cooldown: 1.0
       Range: 6
-      Damage: [5.0, 6.0]
+      MinDamage: 2.5
+      MaxDamage: 3.0
       Visual: "arrow"
+  DeathVisual: Structure
+
+Inferno Tower:
+  Tags:
+    - Structure
+  HP: 15
+  Image: "/mages/tower.png,/mages/inferno.png"
+  Behaviours:
+    - Type: RingAttack
+      Cooldown: 1.5
+      Range: 6
+      MinDamage: 2.5
+      MaxDamage: 5.0
+      Visual: "fire ring"
   DeathVisual: Structure
 
 Acolyte:
@@ -63,15 +78,20 @@ Acolyte:
       Capacity: 25
     - Type: Repair
       Cooldown: 1.0
-      Amount: 1.0
+      Strength: 1.0
     - Type: Build
       Unit: "Arrow Tower"
       Duration: 10.0
       Costs:
-        - Resource: Wood
-          Amount: 100
-        - Resource: Stone
-          Amount: 100
+        - [Wood, 100]
+        - [Stone, 100]
+    - Type: Build
+      Unit: "Inferno Tower"
+      Duration: 10.0
+      Costs:
+        - [Wood, 100]
+        - [Stone, 100]
+        - [Aether, 50]
   DeathVisual: Blood
 
 Portal:
@@ -90,6 +110,7 @@ Portal:
         Infiltrator: 3
         Behemoth: 3
         Warlock: 3
+        Hunter: 5
     - Type: Empower
       Cooldown: 30.0
       Strength: 1
@@ -99,7 +120,7 @@ Portal:
 Voidling:
   Tags:
     - Unit
-  HP: 5
+  HP: 2.5
   Image: "/void/background.png,/void/voidling.png"
   Size: 150
   Behaviours:
@@ -108,14 +129,15 @@ Voidling:
     - Type: Attack
       Cooldown: 1.0
       Range: 1
-      Damage: [0.75, 1.25]
+      MinDamage: 0.75
+      MaxDamage: 1.25
       Visual: "claws"
   DeathVisual: Void
 
 Infiltrator:
   Tags:
     - Unit
-  HP: 10
+  HP: 15
   Image: "/void/background.png,/void/infiltrator.png"
   Behaviours:
     - Type: SeekFortress
@@ -123,7 +145,8 @@ Infiltrator:
     - Type: Attack
       Cooldown: 1.0
       Range: 1
-      Damage: [2.0, 3.0]
+      MinDamage: 2.0
+      MaxDamage: 3.0
       Visual: "claws"
     - Type: Stealth
       Cooldown: 10.0
@@ -142,14 +165,15 @@ Behemoth:
     - Type: Attack
       Cooldown: 1.5
       Range: 1
-      Damage: [6.0, 8.0]
+      MinDamage: 6.0
+      MaxDamage: 7.0
       Visual: "claws"
   DeathVisual: Void
 
 Warlock:
   Tags:
     - Unit
-  HP: 10
+  HP: 15
   Image: "/void/background.png,/void/warlock.png"
   Behaviours:
     - Type: SeekFortress
@@ -157,13 +181,31 @@ Warlock:
     - Type: Attack
       Cooldown: 1.0
       Range: 4
-      Damage: [2.0, 3.0]
+      MinDamage: 2.0
+      MaxDamage: 3.0
       Visual: "void orb"
       Target: Random
     - Type: Attack
       Cooldown: 1.0
       Range: 4
-      Damage: [2.0, 3.0]
+      MinDamage: 2.0
+      MaxDamage: 3.0
       Visual: "void orb"
       Target: Random
+  DeathVisual: Void
+
+Hunter:
+  Tags:
+    - Unit
+  HP: 30
+  Image: "/void/background.png,/void/hunter.png"
+  Behaviours:
+    - Type: SeekFortress
+      Cooldown: 0.9
+    - Type: Attack
+      Cooldown: 0.3
+      Range: 1
+      MinDamage: 2.0
+      MaxDamage: 3.0
+      Visual: "claws"
   DeathVisual: Void
