@@ -14,16 +14,10 @@ class PriorityQueue(Generic[T, P]):
         self.counter = itertools.count()
 
     def __bool__(self):
-        return self.empty()
+        return not self.empty()
 
     def empty(self) -> bool:
-        while self.heap:
-            item = self.heap[0][-1]
-            if item is None:
-                heapq.heappop(self.heap)
-            else:
-                return True
-        return False
+        return self.peek() is None
 
     def add(self, item: T, priority: P):
         """
@@ -49,7 +43,7 @@ class PriorityQueue(Generic[T, P]):
     def peek(self) -> T:
         """
         Return the next item in the queue with the lowest
-        remaining priority.
+        remaining priority, or None if no items remain.
         """
         while self.heap:
             item = self.heap[0][-1]
@@ -57,7 +51,7 @@ class PriorityQueue(Generic[T, P]):
                 heapq.heappop(self.heap)
             else:
                 return item
-        raise IndexError("peek on empty priority queue")
+        return None
 
     def pop(self) -> T:
         """

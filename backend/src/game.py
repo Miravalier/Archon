@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import math
 import random
 import time
 import traceback
@@ -527,6 +528,7 @@ class AttackBehaviour(Behaviour):
     min_damage: float = Field(0.0, alias="MinDamage")
     max_damage: float = Field(0.0, alias="MaxDamage")
     visual: str = Field("", alias="Visual")
+    distance_delay: float = Field(0.0, alias="DistanceDelay") # Time in seconds for the attack to cross 1 unit
     strategy: TargetStrategy = Field(TargetStrategy.Closest, alias="Target")
 
     manual_target: Optional[str] = None
@@ -571,12 +573,15 @@ class AttackBehaviour(Behaviour):
             "visual": self.visual,
             "source": entity.id,
             "target": enemy.id,
+            "delay": self.distance_delay,
+            "range": self.range,
         })
 
-        await game.handle_attack(
+        game.queue_attack(
             entity,
             enemy,
-            random.uniform(self.min_damage, self.max_damage)
+            random.uniform(self.min_damage, self.max_damage),
+            self.distance_delay
         )
         return True
 
@@ -586,6 +591,7 @@ class RingAttackBehaviour(Behaviour):
     min_damage: float = Field(0.0, alias="MinDamage")
     max_damage: float = Field(0.0, alias="MaxDamage")
     visual: str = Field("", alias="Visual")
+    distance_delay: float = Field(0.0, alias="DistanceDelay") # Time in seconds for the ring to expand 1 unit
 
     async def on_activate(self, entity: Entity, game: Game):
         if await super().on_activate(entity, game):
@@ -598,13 +604,16 @@ class RingAttackBehaviour(Behaviour):
                 "visual": self.visual,
                 "source": entity.id,
                 "target": entity.id,
+                "delay": self.distance_delay,
+                "range": self.range,
             })
 
         for enemy in enemies:
-            await game.handle_attack(
+            game.queue_attack(
                 entity,
                 enemy,
-                random.uniform(self.min_damage, self.max_damage)
+                random.uniform(self.min_damage, self.max_damage),
+                self.distance_delay
             )
 
         if enemies:
@@ -843,7 +852,7 @@ class Entity(BaseModel):
     vision_size: int = 10
     image: list[str] = Field(default_factory=list)
     tint: int = 0xFFFFFF # RBG tint
-    size: int = 200 # Size of image in pixels
+    size: int = 200 # Size of image in pixelsamount
     behaviours: list[Behaviour] = Field(default_factory=list)
     behaviours_by_label: dict[str, Behaviour] = Field(default_factory=dict)
     death_visual: str = ""
@@ -851,6 +860,15 @@ class Entity(BaseModel):
     status_ids: dict[str,str] = Field(default_factory=dict)
 
     time_until_update: float = Field(0.0, exclude=True)
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __eq__(self, other: Entity) -> bool:
+        return self.id == other.id
+
+    def __lt__(self, other: Entity) -> bool:
+        return self.id < other.id
 
     async def add_status(self, game: Game, status: str) -> str:
         status_id = generate_id()
@@ -958,6 +976,11 @@ class Entity(BaseModel):
             commands.extend(behaviour.on_query(self, game))
         return commands
 
+    def xy_distance(self, other: Entity) -> float:
+        dx = self.position.x - other.position.x
+        dy = self.position.y - other.position.y
+        return math.sqrt(dx*dx + dy*dy)
+
 
 def create_hexagon(position: Position, size: int) -> Polygon:
     positions: list[Position] = [
@@ -993,10 +1016,11 @@ class Game(BaseModel):
     units: dict[str, Entity] = Field(default_factory=dict, exclude=True)
     map: dict[Position, Entity] = Field(default_factory=dict, exclude=True)
     subscribers: set[Connection] = Field(default_factory=set, exclude=True)
+    queued_attacks: PriorityQueue[tuple[Entity, Entity, float, float], float] = Field(default_factory=PriorityQueue, exclude=True)
     queued_updates: set[str] = Field(default_factory=set, exclude=True)
 
-    runtime: float = 0.0
-    time_since_active: float = 0.0
+    runtime: float = 0.0 # Seconds the game has been running
+    time_since_active: float = 0.0 # Seconds since being inactive
 
     food: float = 1000.0
     gold: float = 1000.0
@@ -1069,6 +1093,14 @@ class Game(BaseModel):
         for entity in tuple(self.entities.values()):
             await entity.on_tick(self, delta)
 
+        while self.queued_attacks:
+            attacker, target, amount, resolve_time = self.queued_attacks.peek()
+            if self.runtime > resolve_time:
+                self.queued_attacks.pop()
+                await self.resolve_attack(attacker, target, amount)
+            else:
+                break
+
         serialized_entities = []
         for entity_id in self.queued_updates:
             entity = self.entities.get(entity_id, None)
@@ -1112,7 +1144,14 @@ class Game(BaseModel):
         self.queue_update(entity)
         await entity.on_heal(self, actual_amount)
 
-    async def handle_attack(self, attacker: Entity, target: Entity, amount: float):
+    def queue_attack(self, attacker: Entity, target: Entity, amount: float, delay: float = 0.0):
+        distance = attacker.xy_distance(target) / (GRID_SIZE * 1.5)
+        resolve_time = self.runtime + delay * distance
+        self.queued_attacks.add((attacker, target, amount, resolve_time), resolve_time)
+
+    async def resolve_attack(self, attacker: Entity, target: Entity, amount: float):
+        if target.removed:
+            return
         amount = await target.on_hit(self, attacker, amount)
 
         target.hp -= amount

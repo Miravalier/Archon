@@ -166,7 +166,12 @@ export function fadeOutGraphics(graphics: Graphics, durationMs: number) {
 }
 
 
-export function animateProjectile(graphics: Graphics, startX: number, startY: number, endX: number, endY: number, durationMs: number) {
+export function animateProjectile(graphics: Graphics, startX: number, startY: number, endX: number, endY: number, delay: number) {
+    const dx = startX - endX;
+    const dy = startY - endY;
+    const distance = Math.sqrt(dx*dx + dy*dy) / (state.gridSize * 1.5);
+    const durationMs = distance * delay * 1000;
+
     let timeElapsed = 0;
     const tickId = generateToken();
     addOnTick(tickId, deltaMs => {
@@ -183,6 +188,28 @@ export function animateProjectile(graphics: Graphics, startX: number, startY: nu
         removeOnTick(tickId);
         destroyGraphics(graphics);
     }, durationMs+100);
+}
+
+
+export function animateExpandThenFade(graphics: Graphics, startSize: number, endSize: number, expandDurationMs: number, fadeDurationMs: number) {
+    let timeElapsed = 0;
+    const tickId = generateToken();
+    addOnTick(tickId, deltaMs => {
+        timeElapsed += deltaMs;
+        if (timeElapsed > expandDurationMs + fadeDurationMs) {
+            graphics.alpha = 0;
+        } else if (timeElapsed > expandDurationMs) {
+            graphics.alpha = lerp(1, 0, (timeElapsed-expandDurationMs)/fadeDurationMs);
+            graphics.scale = endSize;
+        } else {
+            graphics.scale = lerp(startSize, endSize, timeElapsed/expandDurationMs);
+        }
+    });
+
+    setTimeout(() => {
+        removeOnTick(tickId);
+        destroyGraphics(graphics);
+    }, expandDurationMs+fadeDurationMs+100);
 }
 
 
@@ -239,7 +266,7 @@ export function displayDeathVisual(x: number, y: number, visual: string) {
 }
 
 
-export function displayAttackVisual(srcX: number, srcY: number, targetX: number, targetY: number, visual: string) {
+export function displayAttackVisual(srcX: number, srcY: number, targetX: number, targetY: number, visual: string, delay: number, range: number) {
     const attack = makeGraphics();
 
     if (visual == "laser") {
@@ -276,13 +303,14 @@ export function displayAttackVisual(srcX: number, srcY: number, targetX: number,
         attack.x = srcX;
         attack.y = srcY;
         attack.rotation = Math.atan2(targetY - srcY, targetX - srcX);
-        animateProjectile(attack, srcX, srcY, targetX, targetY, 200);
+        animateProjectile(attack, srcX, srcY, targetX, targetY, delay);
     } else if (visual == "fire ring") {
-        attack.circle(0, 0, 100);
-        attack.stroke({width: 20, color: "#ff8c00"});
+        const durationMs = range * delay * 1000;
+        attack.circle(0, 0, state.gridSize * 1.5);
+        attack.stroke({width: 32, color: "#ff8c00"});
         attack.x = targetX;
         attack.y = targetY;
-        animateExpandAndFade(attack, 1.0, 16.0, 300);
+        animateExpandThenFade(attack, 0.1, range, durationMs, 100);
     }
 
     state.camera.addChild(attack);
