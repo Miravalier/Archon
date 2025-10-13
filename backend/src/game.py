@@ -36,13 +36,13 @@ def generate_id() -> str:
 
 
 class ResourceType(StrEnum):
-    Null = ""
+    Null = "Null"
 
-    Food = "food"
-    Gold = "gold"
-    Stone = "stone"
-    Wood = "wood"
-    Aether = "aether"
+    Food = "Food"
+    Gold = "Gold"
+    Stone = "Stone"
+    Wood = "Wood"
+    Aether = "Aether"
 
 
 class GameState(StrEnum):
@@ -201,13 +201,20 @@ class Alignment(IntEnum):
     Player = 2
 
 
+behaviour_map = {}
+
+
 class Behaviour(BaseModel):
     """
     Abstract base class for all behaviours.
     """
-    label: Optional[str] = None
+    label: Optional[str] = Field(None, alias="Label")
     time_until_activation: float = 0.0 # Time in seconds before the first activation
-    cooldown: float = 0.0 # Time in seconds between subsequent activations
+    cooldown: float = Field(0.0, alias="Cooldown") # Time in seconds between subsequent activations
+
+    def __init_subclass__(cls, **kwargs):
+        behaviour_map[cls.__name__.removesuffix("Behaviour")] = cls
+        return super().__init_subclass__(**kwargs)
 
     def on_query(self, entity: Entity, game: Game) -> list[tuple[str, str]]:
         """
@@ -270,10 +277,6 @@ class Behaviour(BaseModel):
         """
         pass
 
-    @classmethod
-    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
-        raise NotImplementedError("this class does not implement from_yaml")
-
 
 class EssentialBehaviour(Behaviour):
     async def on_remove(self, entity: Entity, game: Game):
@@ -281,12 +284,6 @@ class EssentialBehaviour(Behaviour):
 
         if not any(e.name == entity.name for e in game.entities.values()):
             await game.end(False, "Defeat")
-
-    @classmethod
-    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return cls()
 
 
 class KillObjectiveBehaviour(Behaviour):
@@ -296,17 +293,11 @@ class KillObjectiveBehaviour(Behaviour):
         if not any(e.name == entity.name for e in game.entities.values()):
             await game.end(True, "Victory")
 
-    @classmethod
-    def from_yaml(cls: Type[Behaviour], data: dict) -> Behaviour:
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return cls()
-
 
 class UnderConstructionBehaviour(Behaviour):
-    unit: str
-    builder: Entity
-    costs: list[tuple[ResourceType, int]]
+    unit: str = Field(alias="Unit")
+    costs: list[tuple[ResourceType, int]] = Field(alias="Costs")
+    builder: Optional[Entity] = None
 
     async def on_heal(self, entity: Entity, game: Game, amount: float):
         await super().on_heal(entity, game, amount)
@@ -335,10 +326,9 @@ class UnderConstructionBehaviour(Behaviour):
 
 
 class BuildBehaviour(Behaviour):
-    unit: str
-    costs: list[tuple[ResourceType, int]]
-    duration: float = 0.0
-    description: str = ""
+    unit: str = Field(alias="Unit")
+    costs: list[tuple[ResourceType, int]] = Field(alias="Costs")
+    duration: float = Field(0.0, alias="Duration")
 
     @property
     def tooltip(self):
@@ -369,32 +359,11 @@ class BuildBehaviour(Behaviour):
                 if isinstance(behaviour, PathingBehaviour):
                     behaviour.target_position = position
 
-    @classmethod
-    def from_yaml(cls, data):
-        costs = []
-        cost_data: list[dict] = data.pop("Costs", [])
-        for cost in cost_data:
-            costs.append((ResourceType[cost.pop("Resource")], int(cost.pop("Amount"))))
-            if cost:
-                raise KeyError(f"unused cost keys: {list(cost.keys())}")
-        unit = data.pop("Unit")
-        result = cls(
-            costs=costs,
-            unit=unit,
-            label=data.pop("Label", None),
-            duration=data.pop("Duration", 0.0),
-            description=data.pop("Description", ""),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class TrainBehaviour(Behaviour):
-    unit: str
-    costs: list[tuple[ResourceType, int]]
-    duration: float = 0.0
-    description: str = ""
+    unit: str = Field(alias="Unit")
+    costs: list[tuple[ResourceType, int]] = Field(alias="Costs")
+    duration: float = Field(0.0, alias="Duration")
 
     queue: int = 0
     progress: float = 0.0
@@ -452,26 +421,6 @@ class TrainBehaviour(Behaviour):
                 self.queue -= 1
                 await self.send_training_update(entity, game)
 
-    @classmethod
-    def from_yaml(cls, data):
-        costs = []
-        cost_data: list[dict] = data.pop("Costs", [])
-        for cost in cost_data:
-            costs.append((ResourceType[cost.pop("Resource")], int(cost.pop("Amount"))))
-            if cost:
-                raise KeyError(f"unused cost keys: {list(cost.keys())}")
-        unit = data.pop("Unit")
-        result = cls(
-            costs=costs,
-            unit=unit,
-            label=data.pop("Label", None),
-            duration=data.pop("Duration", 0.0),
-            description=data.pop("Description", ""),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 resource_values = {
     ResourceType.Food: 0.5,
@@ -483,10 +432,10 @@ resource_values = {
 
 
 class TransmuteBehaviour(Behaviour):
-    current_rate: int = 0
-    maximum_rate: int = 15
-    efficiency: float = 0.8
+    maximum_rate: int = Field(15, alias="Rate")
+    efficiency: float = Field(0.8, alias="Efficiency")
 
+    current_rate: int = 0
     from_resource: ResourceType = ResourceType.Null
     to_resource: ResourceType = ResourceType.Null
     remainder: float = 0.0
@@ -495,9 +444,9 @@ class TransmuteBehaviour(Behaviour):
         commands = super().on_query(entity, game)
         commands.append(["!", "Transmuting"])
         commands.append(["rate", f"Number:0:{self.current_rate}:{self.maximum_rate}"])
-        commands.append(["from_resource", f"ResourceType:{self.from_resource.capitalize()}"])
+        commands.append(["from_resource", f"ResourceType:{self.from_resource}"])
         commands.append(["!", "per second into"])
-        commands.append(["to_resource", f"ResourceType:{self.to_resource.capitalize()}"])
+        commands.append(["to_resource", f"ResourceType:{self.to_resource}"])
 
         return commands
 
@@ -505,10 +454,10 @@ class TransmuteBehaviour(Behaviour):
         await super().on_command(entity, game, key, value)
 
         if key == "from_resource":
-            self.from_resource = ResourceType(value)
+            self.from_resource = ResourceType[value]
             self.remainder = 0.0
         elif key == "to_resource":
-            self.to_resource = ResourceType(value)
+            self.to_resource = ResourceType[value]
             self.remainder = 0.0
         elif key == "rate":
             rate = int(value)
@@ -524,39 +473,22 @@ class TransmuteBehaviour(Behaviour):
         if self.from_resource == ResourceType.Null or self.to_resource == ResourceType.Null:
             return False
 
-        if self.current_rate == 0:
+        goods_sold = await game.spend_up_to(self.from_resource, self.current_rate)
+        if goods_sold == 0:
             return False
 
-        goods_sold = self.current_rate
         value = goods_sold * resource_values[self.from_resource]
         goods_purchased_fractional = value / resource_values[self.to_resource] * self.efficiency + self.remainder
         goods_purchased = int(goods_purchased_fractional)
         self.remainder = goods_purchased_fractional - goods_purchased
 
-        try:
-            await game.spend([self.from_resource, goods_sold])
-        except ClientError:
-            return False
-
         await game.add_resource(self.to_resource, goods_purchased)
         return True
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            maximum_rate=data.pop("Rate"),
-            efficiency=data.pop("Efficiency"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class StealthBehaviour(Behaviour):
-    cooldown: float
-    duration: float
+    cooldown: float = Field(alias="Cooldown")
+    duration: float = Field(alias="Duration")
 
     active: bool = False
     status_id: Optional[str] = None
@@ -589,24 +521,14 @@ class StealthBehaviour(Behaviour):
 
         return amount
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            duration=data.pop("Duration"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class AttackBehaviour(Behaviour):
-    range: int = 1
-    min_damage: float = 0.0
-    max_damage: float = 0.0
-    visual: str = ""
-    strategy: TargetStrategy = TargetStrategy.Closest
+    range: int = Field(1, alias="Range")
+    min_damage: float = Field(0.0, alias="MinDamage")
+    max_damage: float = Field(0.0, alias="MaxDamage")
+    visual: str = Field("", alias="Visual")
+    strategy: TargetStrategy = Field(TargetStrategy.Closest, alias="Target")
+
     manual_target: Optional[str] = None
 
     async def on_target(self, entity: Entity, game: Game, position: Position):
@@ -652,25 +574,13 @@ class AttackBehaviour(Behaviour):
         )
         return True
 
-    @classmethod
-    def from_yaml(cls, data):
-        min_damage, max_damage = data.pop("Damage")
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            min_damage=min_damage,
-            max_damage=max_damage,
-            range=data.pop("Range"),
-            visual=data.pop("Visual"),
-            strategy=TargetStrategy[data.pop("Target", "Closest")],
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
+
+class RingAttackBehaviour(AttackBehaviour):
+    pass
 
 
 class SummonBehaviour(Behaviour):
-    unit: str
+    unit: str = Field(alias="Unit")
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
@@ -679,24 +589,13 @@ class SummonBehaviour(Behaviour):
         await game.add_entity(self.unit, game.empty_space_near(entity.position), entity.alignment)
         return True
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            unit=data.pop("Unit"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class StrengthBehaviour(Behaviour):
-    strength: int
+    strength: int = Field(alias="Strength")
 
 
 class SummonPoolBehaviour(StrengthBehaviour):
-    units: dict[str, int]
+    units: dict[str, int] = Field(alias="Units")
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
@@ -712,27 +611,13 @@ class SummonPoolBehaviour(StrengthBehaviour):
             await game.add_entity(unit, game.empty_space_near(entity.position), entity.alignment)
         return True
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            units=data.pop("Units"),
-            strength=data.pop("Strength"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class EmpowerBehaviour(StrengthBehaviour):
-    empowered_behaviour: str
+    empowered_behaviour: str = Field(alias="EmpoweredBehaviour")
 
     async def on_activate(self, entity: Entity, game: Game) -> bool:
         if await super().on_activate(entity, game):
             return True
-
-
 
         empowered_behaviour = entity.behaviours_by_label.get(self.empowered_behaviour)
         if empowered_behaviour is None:
@@ -742,18 +627,6 @@ class EmpowerBehaviour(StrengthBehaviour):
 
         empowered_behaviour.strength += self.strength
         return True
-
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            empowered_behaviour=data.pop("EmpoweredBehaviour"),
-            strength=data.pop("Strength"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
 
 
 class PathingBehaviour(Behaviour):
@@ -812,9 +685,10 @@ class PathingBehaviour(Behaviour):
 
 
 class WorkerBehaviour(PathingBehaviour):
+    carry_capacity: int = Field(25, alias="Capacity")
+
     target_resource: Optional[Entity] = None
     carried_resource: ResourceType = ResourceType.Null
-    carry_capacity: int = 25
     carry_amount: int = 0
 
     async def on_target(self, entity: Entity, game: Game, position: Position):
@@ -857,21 +731,8 @@ class WorkerBehaviour(PathingBehaviour):
         else:
             return False
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            cooldown=data.pop("Cooldown"),
-            carry_capacity=data.pop("Capacity"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
 
-
-class RepairBehaviour(Behaviour):
-    amount: float = 1.0
-
+class RepairBehaviour(StrengthBehaviour):
     async def on_activate(self, entity: Entity, game: Game):
         if await super().on_activate(entity, game):
             return True
@@ -886,21 +747,10 @@ class RepairBehaviour(Behaviour):
                 continue
             if structure.hp == structure.max_hp:
                 continue
-            await game.heal_entity(structure, self.amount)
+            await game.heal_entity(structure, self.strength)
             return True
 
         return False
-
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            amount=float(data.pop("Amount", 1.0)),
-            cooldown=data.pop("Cooldown"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
 
 
 class SeekEnemyBehaviour(PathingBehaviour):
@@ -936,17 +786,6 @@ class SeekEnemyBehaviour(PathingBehaviour):
         # Move toward the target
         return await self.move_toward(entity, game, enemy.position)
 
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            ideal_distance=data.pop("Distance", 1),
-            cooldown=data.pop("Cooldown"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
 
 class SeekFortressBehaviour(SeekEnemyBehaviour):
     async def on_activate(self, entity: Entity, game: Game) -> bool:
@@ -954,34 +793,6 @@ class SeekFortressBehaviour(SeekEnemyBehaviour):
             return True
 
         return await self.move_toward(entity, game, Position(0, 0))
-
-    @classmethod
-    def from_yaml(cls, data):
-        result = cls(
-            label=data.pop("Label", None),
-            ideal_distance=data.pop("Distance", 1),
-            cooldown=data.pop("Cooldown"),
-        )
-        if data:
-            raise KeyError(f"unused behaviour keys: {list(data.keys())}")
-        return result
-
-
-behaviour_map = {
-    "Attack": AttackBehaviour,
-    "Summon": SummonBehaviour,
-    "SummonPool": SummonPoolBehaviour,
-    "Empower": EmpowerBehaviour,
-    "Worker": WorkerBehaviour,
-    "SeekFortress": SeekFortressBehaviour,
-    "Transmute": TransmuteBehaviour,
-    "Build": BuildBehaviour,
-    "Train": TrainBehaviour,
-    "Repair": RepairBehaviour,
-    "Essential": EssentialBehaviour,
-    "KillObjective": KillObjectiveBehaviour,
-    "Stealth": StealthBehaviour,
-}
 
 
 class Entity(BaseModel):
@@ -1235,18 +1046,29 @@ class Game(BaseModel):
         if serialized_entities:
             await self.broadcast({"type": "entity/update", "entities": serialized_entities})
 
+    async def spend_up_to(self, resource_type: ResourceType, amount: int) -> int:
+        available = getattr(self, resource_type.lower())
+        spent = min(available, amount)
+        if spent > 0:
+            new_amount = available - spent
+            setattr(self, resource_type.lower(), new_amount)
+            await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": new_amount})
+        return spent
+
     async def spend(self, *costs: tuple[ResourceType, int]):
         for resource_type, amount in costs:
-            available = getattr(self, str(resource_type))
+            available = getattr(self, resource_type.lower())
             if available < amount:
                 raise ClientError(f"not enough {resource_type}")
         for resource_type, amount in costs:
-            setattr(self, str(resource_type), getattr(self, str(resource_type)) - amount)
-            await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": -amount})
+            new_amount = getattr(self, resource_type.lower()) - amount
+            setattr(self, resource_type.lower(), new_amount)
+            await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": new_amount})
 
     async def add_resource(self, resource_type: ResourceType, amount: int):
-        setattr(self, str(resource_type), getattr(self, str(resource_type)) + amount)
-        await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": amount})
+        new_amount = getattr(self, resource_type.lower()) + amount
+        setattr(self, resource_type.lower(), new_amount)
+        await self.broadcast({"type": "resource", "resource_type": resource_type, "amount": new_amount})
 
     async def heal_entity(self, entity: Entity, amount: float):
         if entity.hp == entity.max_hp:
@@ -1614,7 +1436,7 @@ def load_entities():
             behaviours: list[Behaviour] = []
             for behaviour_data in entity_data.pop("Behaviours", []):
                 behaviour_class: Type[Behaviour] = behaviour_map[behaviour_data.pop("Type")]
-                behaviours.append(behaviour_class.from_yaml(behaviour_data))
+                behaviours.append(behaviour_class.model_validate(behaviour_data))
             params["behaviours"] = behaviours
 
             if entity_data:
