@@ -51,6 +51,11 @@ class GameState(StrEnum):
     Finished = "finished"
 
 
+class TargetStrategy(StrEnum):
+    Closest = "closest"
+    Random = "random"
+
+
 class Position(BaseModel):
     q: int
     r: int
@@ -194,23 +199,6 @@ class Alignment(IntEnum):
     Enemy = 0
     Neutral = 1
     Player = 2
-
-
-entity_tag_map = {
-    "Structure": EntityTag.Structure,
-    "Unit": EntityTag.Unit,
-    "Resource": EntityTag.Resource,
-}
-
-
-resource_type_map = {
-    "": ResourceType.Null,
-    "Food": ResourceType.Food,
-    "Gold": ResourceType.Gold,
-    "Stone": ResourceType.Stone,
-    "Wood": ResourceType.Wood,
-    "Aether": ResourceType.Aether,
-}
 
 
 class Behaviour(BaseModel):
@@ -386,7 +374,7 @@ class BuildBehaviour(Behaviour):
         costs = []
         cost_data: list[dict] = data.pop("Costs", [])
         for cost in cost_data:
-            costs.append((resource_type_map[cost.pop("Resource")], int(cost.pop("Amount"))))
+            costs.append((ResourceType[cost.pop("Resource")], int(cost.pop("Amount"))))
             if cost:
                 raise KeyError(f"unused cost keys: {list(cost.keys())}")
         unit = data.pop("Unit")
@@ -469,7 +457,7 @@ class TrainBehaviour(Behaviour):
         costs = []
         cost_data: list[dict] = data.pop("Costs", [])
         for cost in cost_data:
-            costs.append((resource_type_map[cost.pop("Resource")], int(cost.pop("Amount"))))
+            costs.append((ResourceType[cost.pop("Resource")], int(cost.pop("Amount"))))
             if cost:
                 raise KeyError(f"unused cost keys: {list(cost.keys())}")
         unit = data.pop("Unit")
@@ -517,10 +505,10 @@ class TransmuteBehaviour(Behaviour):
         await super().on_command(entity, game, key, value)
 
         if key == "from_resource":
-            self.from_resource = resource_type_map[value]
+            self.from_resource = ResourceType(value)
             self.remainder = 0.0
         elif key == "to_resource":
-            self.to_resource = resource_type_map[value]
+            self.to_resource = ResourceType(value)
             self.remainder = 0.0
         elif key == "rate":
             rate = int(value)
@@ -618,6 +606,7 @@ class AttackBehaviour(Behaviour):
     min_damage: float = 0.0
     max_damage: float = 0.0
     visual: str = ""
+    strategy: TargetStrategy = TargetStrategy.Closest
     manual_target: Optional[str] = None
 
     async def on_target(self, entity: Entity, game: Game, position: Position):
@@ -644,8 +633,13 @@ class AttackBehaviour(Behaviour):
         manual_target = game.entities.get(self.manual_target)
         if manual_target is not None and manual_target.position.distance(entity.position) <= self.range:
             enemy = manual_target
-        else:
+        elif self.strategy == TargetStrategy.Closest:
             enemy = entity.find_enemy_nearby(game, self.range)
+        else:
+            enemies = entity.find_enemies_nearby(game, self.range)
+            if not enemies:
+                return False
+            enemy = random.choice(enemies)
 
         if enemy is None:
             return False
@@ -668,6 +662,7 @@ class AttackBehaviour(Behaviour):
             max_damage=max_damage,
             range=data.pop("Range"),
             visual=data.pop("Visual"),
+            strategy=TargetStrategy[data.pop("Target", "Closest")],
         )
         if data:
             raise KeyError(f"unused behaviour keys: {list(data.keys())}")
@@ -1072,6 +1067,20 @@ class Entity(BaseModel):
             if entity.alignment != self.alignment:
                 return entity
         return None
+
+    def find_enemies_nearby(self, game: Game, limit: int = 20) -> list[Entity]:
+        enemies = []
+        for position in self.position.flood_fill(limit):
+            entity = game.map.get(position)
+            if entity is None:
+                continue
+            if entity.alignment == Alignment.Neutral:
+                continue
+            if entity.has_status("stealth"):
+                continue
+            if entity.alignment != self.alignment:
+                enemies.append(entity)
+        return enemies
 
     async def on_target(self, game: Game, position: Position):
         for behaviour in self.behaviours:
@@ -1595,11 +1604,11 @@ def load_entities():
             if image:
                 params["image"] = ["/images/entities" + src.strip() for src in image.split(",")]
 
-            params["resource_type"] = resource_type_map[entity_data.pop("ResourceType", "")]
+            params["resource_type"] = ResourceType[entity_data.pop("ResourceType", "Null")]
 
             entity_tag = 0
             for tag in entity_data.pop("Tags", []):
-                entity_tag |= entity_tag_map[tag]
+                entity_tag |= EntityTag[tag]
             params["entity_tag"] = entity_tag
 
             behaviours: list[Behaviour] = []

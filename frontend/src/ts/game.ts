@@ -533,7 +533,7 @@ export async function activate(game_id: string) {
                 attack.y = srcY;
                 attack.rotation = Math.atan2(targetY - srcY, targetX - srcX) + Math.PI/2;
                 fadeOutGraphics(attack, 200);
-            } else if (data.visual == "arrow") {
+            } else if (data.visual == "arrow" || data.visual == "void orb") {
                 attack.moveTo(-50, 0);
                 attack.lineTo(-55, -10);
                 attack.lineTo(-35, -10);
