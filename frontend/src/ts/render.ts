@@ -239,6 +239,56 @@ export function displayDeathVisual(x: number, y: number, visual: string) {
 }
 
 
+export function displayAttackVisual(srcX: number, srcY: number, targetX: number, targetY: number, visual: string) {
+    const attack = makeGraphics();
+
+    if (visual == "laser") {
+        attack.moveTo(srcX, srcY);
+        attack.lineTo(targetX, targetY);
+        attack.stroke({ color: "#880088", width: 8, pixelLine: true });
+        fadeOutGraphics(attack, 200);
+    } else if (visual == "claws") {
+        for (const [x, y] of [[60, -240], [80, -210], [70, -180]]) {
+            attack.moveTo(-x, y);
+            attack.bezierCurveTo(-36, y-24, 36, y-24, x, y);
+            attack.bezierCurveTo(-36, y-12, 36, y-12, -x, y);
+            attack.fill({ color: "#880088"});
+        }
+        attack.x = srcX;
+        attack.y = srcY;
+        attack.rotation = Math.atan2(targetY - srcY, targetX - srcX) + Math.PI/2;
+        fadeOutGraphics(attack, 200);
+    } else if (visual == "arrow" || visual == "void orb") {
+        attack.moveTo(-50, 0);
+        attack.lineTo(-55, -10);
+        attack.lineTo(-35, -10);
+        attack.lineTo(-35, -3);
+        attack.lineTo(40, -3);
+        attack.lineTo(35, -15);
+        attack.lineTo(55, 0);
+        attack.lineTo(35, 15);
+        attack.lineTo(40, 3);
+        attack.lineTo(-35, 3);
+        attack.lineTo(-35, 10);
+        attack.lineTo(-55, 10);
+        attack.lineTo(-50, 0);
+        attack.fill({ color: "#888888" });
+        attack.x = srcX;
+        attack.y = srcY;
+        attack.rotation = Math.atan2(targetY - srcY, targetX - srcX);
+        animateProjectile(attack, srcX, srcY, targetX, targetY, 200);
+    } else if (visual == "fire ring") {
+        attack.circle(0, 0, 100);
+        attack.stroke({width: 20, color: "#ff8c00"});
+        attack.x = targetX;
+        attack.y = targetY;
+        animateExpandAndFade(attack, 1.0, 16.0, 300);
+    }
+
+    state.camera.addChild(attack);
+}
+
+
 export function addTooltip(element: HTMLElement, text: string): HTMLDivElement {
     const actionBar = document.querySelector("#action-bar");
     const tooltip = actionBar.appendChild(document.createElement("div"));

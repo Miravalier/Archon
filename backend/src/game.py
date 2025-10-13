@@ -52,8 +52,8 @@ class GameState(StrEnum):
 
 
 class TargetStrategy(StrEnum):
-    Closest = "closest"
-    Random = "random"
+    Closest = "Closest"
+    Random = "Random"
 
 
 class Position(BaseModel):
@@ -295,8 +295,8 @@ class KillObjectiveBehaviour(Behaviour):
 
 
 class UnderConstructionBehaviour(Behaviour):
-    unit: str = Field(alias="Unit")
-    costs: list[tuple[ResourceType, int]] = Field(alias="Costs")
+    unit: str
+    costs: list[tuple[ResourceType, int]]
     builder: Optional[Entity] = None
 
     async def on_heal(self, entity: Entity, game: Game, amount: float):
@@ -566,17 +566,51 @@ class AttackBehaviour(Behaviour):
         if enemy is None:
             return False
 
+        await game.broadcast({
+            "type": "entity/attack",
+            "visual": self.visual,
+            "source": entity.id,
+            "target": enemy.id,
+        })
+
         await game.handle_attack(
             entity,
             enemy,
-            random.uniform(self.min_damage, self.max_damage),
-            self.visual
+            random.uniform(self.min_damage, self.max_damage)
         )
         return True
 
 
-class RingAttackBehaviour(AttackBehaviour):
-    pass
+class RingAttackBehaviour(Behaviour):
+    range: int = Field(1, alias="Range")
+    min_damage: float = Field(0.0, alias="MinDamage")
+    max_damage: float = Field(0.0, alias="MaxDamage")
+    visual: str = Field("", alias="Visual")
+
+    async def on_activate(self, entity: Entity, game: Game):
+        if await super().on_activate(entity, game):
+            return True
+
+        enemies = entity.find_enemies_nearby(game, self.range)
+        if enemies:
+            await game.broadcast({
+                "type": "entity/attack",
+                "visual": self.visual,
+                "source": entity.id,
+                "target": entity.id,
+            })
+
+        for enemy in enemies:
+            await game.handle_attack(
+                entity,
+                enemy,
+                random.uniform(self.min_damage, self.max_damage)
+            )
+
+        if enemies:
+            return True
+        else:
+            return False
 
 
 class SummonBehaviour(Behaviour):
@@ -1078,19 +1112,12 @@ class Game(BaseModel):
         self.queue_update(entity)
         await entity.on_heal(self, actual_amount)
 
-    async def handle_attack(self, attacker: Entity, target: Entity, amount: float, visual: str):
+    async def handle_attack(self, attacker: Entity, target: Entity, amount: float):
         amount = await target.on_hit(self, attacker, amount)
 
         target.hp -= amount
         if target.hp < 0:
             target.hp = 0
-
-        await self.broadcast({
-            "type": "entity/attack",
-            "visual": visual,
-            "source": attacker.id,
-            "target": target.id,
-        })
 
         if target.hp == 0:
             await self.remove_entity(target)
