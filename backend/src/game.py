@@ -424,8 +424,8 @@ class TrainBehaviour(Behaviour):
 
 
 resource_values = {
-    ResourceType.Food: 0.5,
-    ResourceType.Stone: 0.5,
+    ResourceType.Food: 0.4,
+    ResourceType.Stone: 0.6,
     ResourceType.Wood: 0.5,
     ResourceType.Gold: 1.0,
     ResourceType.Aether: 5.0,
@@ -510,10 +510,6 @@ class StealthBehaviour(Behaviour):
     async def on_hit(self, entity: Entity, game: Game, source: Entity, amount: float) -> float:
         amount = await super().on_hit(entity, game, source, amount)
 
-        # If active, take no damage
-        if self.active:
-            return 0.0
-
         # If cooldown has elapsed, activate stealth
         if self.remaining_time >= self.cooldown:
             self.active = True
@@ -597,7 +593,11 @@ class RingAttackBehaviour(Behaviour):
         if await super().on_activate(entity, game):
             return True
 
-        enemies = entity.find_enemies_nearby(game, self.range)
+        enemies = entity.find_enemies_nearby(game, self.range, include_invisible=True)
+
+        if not any(not enemy.has_status("stealth") for enemy in enemies):
+            return False
+
         if enemies:
             await game.broadcast({
                 "type": "entity/attack",
@@ -931,7 +931,7 @@ class Entity(BaseModel):
                 return entity
         return None
 
-    def find_enemies_nearby(self, game: Game, limit: int = 20) -> list[Entity]:
+    def find_enemies_nearby(self, game: Game, limit: int = 20, include_invisible: bool = False) -> list[Entity]:
         enemies = []
         for position in self.position.flood_fill(limit):
             entity = game.map.get(position)
@@ -939,7 +939,7 @@ class Entity(BaseModel):
                 continue
             if entity.alignment == Alignment.Neutral:
                 continue
-            if entity.has_status("stealth"):
+            if not include_invisible and entity.has_status("stealth"):
                 continue
             if entity.alignment != self.alignment:
                 enemies.append(entity)

@@ -305,8 +305,8 @@ export function displayAttackVisual(srcX: number, srcY: number, targetX: number,
         attack.rotation = Math.atan2(targetY - srcY, targetX - srcX);
         animateProjectile(attack, srcX, srcY, targetX, targetY, delay);
     } else if (visual == "fire ring") {
-        const durationMs = range * delay * 1000;
-        attack.circle(0, 0, state.gridSize * 1.5);
+        const durationMs = (range*2) * delay * 1000;
+        attack.circle(0, 0, state.gridSize * 2);
         attack.stroke({width: 32, color: "#ff8c00"});
         attack.x = targetX;
         attack.y = targetY;
