@@ -45,6 +45,7 @@ Arrow Tower:
   Image: "/mages/tower.png,/mages/bow.png"
   Behaviours:
     - Type: Attack
+      DistanceDelay: 0.025
       Cooldown: 1.0
       Range: 6
       MinDamage: 2.5
@@ -59,6 +60,7 @@ Inferno Tower:
   Image: "/mages/tower.png,/mages/inferno.png"
   Behaviours:
     - Type: RingAttack
+      DistanceDelay: 0.1
       Cooldown: 1.5
       Range: 6
       MinDamage: 2.5
@@ -178,6 +180,7 @@ Warlock:
     - Type: SeekFortress
       Cooldown: 0.9
     - Type: Attack
+      DistanceDelay: 0.3
       Cooldown: 1.0
       Range: 4
       MinDamage: 2.0
@@ -185,6 +188,7 @@ Warlock:
       Visual: "void orb"
       Target: Random
     - Type: Attack
+      DistanceDelay: 0.3
       Cooldown: 1.0
       Range: 4
       MinDamage: 2.0

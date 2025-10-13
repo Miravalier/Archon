@@ -513,12 +513,12 @@ export async function activate(game_id: string) {
                 targetY = target.sprite.y;
             }
 
-            displayAttackVisual(srcX, srcY, targetX, targetY, data.visual);
+            displayAttackVisual(srcX, srcY, targetX, targetY, data.visual, data.delay, data.range);
         }
     });
 
     client.subscribe("entity/remove", async data => {
-        await Sleep(100);
+        await Sleep(10);
 
         const entity = game.entities[data.id];
         if (game.selected.has(data.id)) {
@@ -547,10 +547,8 @@ export async function activate(game_id: string) {
         }
 
         if (entity.sprite) {
-            setTimeout(() => {
-                displayDeathVisual(entity.sprite.x, entity.sprite.y, data.visual);
-                destroySprite(entity.sprite);
-            }, 100);
+            displayDeathVisual(entity.sprite.x, entity.sprite.y, data.visual);
+            destroySprite(entity.sprite);
         }
         enemyCountText.textContent = `Enemies: ${game.enemyCount}`;
     });
